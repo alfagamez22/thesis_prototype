@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}
+Account Settings
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Account Settings</h2>
+    <div class="card mt-3">
+        <div class="card-body">
+            <h5 class="card-title">Account Details</h5>
+            <ul class="list-group list-group-flush">
+                <li class="list-group-item"><strong>Username:</strong> {{ user.username }}</li>
+                <li class="list-group-item"><strong>Email:</strong> {{ user.email }}</li>
+                {# Add more fields as needed, e.g. role, date joined, etc. #}
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
