@@ -41,7 +41,8 @@ class Config:
         parser.add_argument("-det_freq", type=int, default=6, help="detection frequency (every N frames)")
         parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
         parser.add_argument("-roi", type=str, default=None, help="Path to ROI coordinates JSON")
-        self.args = parser.parse_args()
+        # Optimize: Only parse args if run as main, otherwise use defaults (empty list)
+        self.args = parser.parse_args([])
 
         # Load action classes
         if self.args.act is None:
