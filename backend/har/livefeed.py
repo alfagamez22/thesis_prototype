@@ -8,6 +8,7 @@ import datetime
 import threading
 import traceback
 from typing import List, Dict, Tuple, Optional
+import collections
 
 import numpy as np
 import cv2
@@ -39,7 +40,8 @@ class Config:
         parser.add_argument("-delay", type=int, default=30, help="frame delay amount")
         parser.add_argument("-fps", type=int, default=10, help="target frames per second")
         parser.add_argument("-det_freq", type=int, default=6, help="detection frequency (every N frames)")
-        parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
+        #parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
+        parser.add_argument("-F", type=str, default="<REPLACE> rtsp://username:password@tunnelip:8554/stream2?tcp <REPLACE>", help="file path for video input") #rtsp://username:password@tunnelip:8554/stream2?tcp
         parser.add_argument("-roi", type=str, default=None, help="Path to ROI coordinates JSON")
         # Optimize: Only parse args if run as main, otherwise use defaults (empty list)
         self.args = parser.parse_args([])
@@ -74,7 +76,9 @@ class Config:
         self.roi_line_p2 = (1253, 675)
 
         # Set video path
-        if self.args.F and not os.path.isabs(self.args.F):
+        # if self.args.F and not os.path.isabs(self.args.F):
+        #     self.args.F = os.path.join(os.path.dirname(__file__), self.args.F)
+        if self.args.F and not (self.args.F.startswith("rtsp://") or self.args.F.startswith("http://") or os.path.isabs(self.args.F)):
             self.args.F = os.path.join(os.path.dirname(__file__), self.args.F)
 
 # ----------------------
@@ -264,7 +268,15 @@ class VideoManager:
         
         # Video buffers
         self.buffer = []         # Action recognition buffer (processed frames)
-        self.delay_buffer = []   # Delay buffer (raw frames)
+        # ---
+        # Delay buffer: This buffer is used to introduce a fixed delay in the video stream output.
+        # Frames are appended to this buffer, and only after the buffer has enough frames (delay + margin),
+        # the oldest frame is popped and processed. This creates a fixed delay (in frames) between capture and display,
+        # which is useful for synchronizing streams, smoothing network jitter, or meeting application requirements.
+        # The delay amount is set by self.config.args.delay (default: 30 frames).
+        # ---
+        self.delay_buffer = collections.deque()  # (frame, timestamp)
+        self.delay_seconds = 2.0  # Set your desired delay here
         
         # State variables
         self.fps_history = []
@@ -297,7 +309,7 @@ class VideoManager:
         else:
             output_path = os.path.join(recordings_dir, f"original_recording_{timestamp}.mp4")
 
-        mp4_codecs = ['MJPG', 'mp4v', 'X264', 'avc1']
+        mp4_codecs = ['mp4v', 'X264', 'avc1']
         success = False
         writer = None
 
@@ -455,7 +467,7 @@ class VideoManager:
             return frame  # Return original frame if not enough delay buffer
             
         # Get delayed frame and process
-        delayed_frame = self.delay_buffer.pop(0)
+        delayed_frame = self.delay_buffer.popleft()
         
         # Person detection (only run every det_freq frames for better performance)
         person_detections = []
@@ -638,6 +650,7 @@ class VideoManager:
     def _video_background_worker(self):
         """Worker function for background video processing"""
         cap = cv2.VideoCapture(self.config.args.F if self.config.args.F else 0)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video source: {self.config.args.F if self.config.args.F else 0}")
             
@@ -647,24 +660,28 @@ class VideoManager:
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     break
-                    
-                processed_frame = self.process_frame(frame)
-                if processed_frame is not None:
-                    # Encode to JPEG in a try-catch to prevent blocking
-                    try:
-                        ret, jpeg = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                        if ret:
-                            with self.video_thread_lock:
-                                self.latest_frame = jpeg.tobytes()
-                    except Exception as e:
-                        print(f"Error encoding frame: {e}")
-                
+
+                # Add frame to delay buffer with timestamp
+                self.delay_buffer.append((frame, time.time()))
+
+                # Pop frames that have been in the buffer for at least delay_seconds
+                while self.delay_buffer and (time.time() - self.delay_buffer[0][1]) >= self.delay_seconds:
+                    delayed_frame, _ = self.delay_buffer.popleft()
+                    processed_frame = self.process_frame(delayed_frame)
+                    if processed_frame is not None:
+                        try:
+                            ret, jpeg = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            if ret:
+                                with self.video_thread_lock:
+                                    self.latest_frame = jpeg.tobytes()
+                        except Exception as e:
+                            print(f"Error encoding frame: {e}")
+
                 # Limit playback to target FPS
                 elapsed = time.time() - frame_start_time
                 target_frame_time = 1.0 / self.config.args.fps
-                delay = max(0.001, target_frame_time - elapsed)  # Minimum 1ms delay
+                delay = max(0.001, target_frame_time - elapsed)
                 time.sleep(delay)
-                
         except Exception as e:
             print(f"Error occurred: {e}")
             import traceback
@@ -681,6 +698,7 @@ class VideoManager:
     def frame_generator(self):
         """Generator that yields processed frames as JPEG for Flask streaming"""
         cap = cv2.VideoCapture(self.config.args.F if self.config.args.F else 0)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video source: {self.config.args.F if self.config.args.F else 0}")
             
