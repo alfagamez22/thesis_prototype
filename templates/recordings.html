@@ -122,11 +122,24 @@ function loadRecordings() {
                     
                     // Only show processed segmented recordings that are NOT currently processing
                     const processedSegmentedFiles = segmentedFiles.filter(segFile => {
-                        // A processed file is of the form 'segmented_recordings/segmented_recording_...'
-                        // The corresponding processing file is 'raw_segmented_recording_...'
-                        // So, if a raw_segmented_recording_... is in processingFiles, skip showing the processed one
-                        const baseName = segFile.replace('segmented_recordings/segmented_recording_', '');
-                        const isProcessing = processingFiles.some(procFile => procFile.replace('raw_segmented_recording_', '') === baseName);
+                        // The processed file is in format: 'segmented_recordings/Segmented Recording 2025-06-01 __ 08-03-46_PM.mp4'
+                        // The corresponding processing file could be: 'Raw Segmented Recording 2025-06-01 __ 08-03-46_PM.mp4'
+                        // Extract the base name from the segmented file
+                        let baseName = segFile.replace('segmented_recordings/', '');
+                        
+                        // Check if any processing file corresponds to this segmented file
+                        const isProcessing = processingFiles.some(procFile => {
+                            // Handle different raw file formats
+                            let procBaseName = procFile;
+                            if (procFile.startsWith('raw_segmented_recording_')) {
+                                procBaseName = procFile.replace('raw_segmented_recording_', 'Segmented Recording ');
+                            } else if (procFile.startsWith('Raw Segmented Recording ')) {
+                                procBaseName = procFile.replace('Raw ', '');
+                            }
+                            
+                            return procBaseName === baseName;
+                        });
+                        
                         return !isProcessing;
                     });
                     processedSegmentedFiles.forEach(function(file) {
@@ -240,8 +253,16 @@ function createProcessingCard(file) {
     const col = document.createElement('div');
     col.className = 'col-md-6 mb-4';
     
-    // Extract timestamp from filename for display
-    const displayName = file.replace('raw_segmented_recording_', 'segmented_recording_');
+    // Extract timestamp from filename for display - handle new format
+    let displayName = file;
+    if (file.startsWith('raw_segmented_recording_')) {
+        displayName = file.replace('raw_segmented_recording_', 'Segmented Recording ');
+    } else if (file.startsWith('Raw Segmented Recording ')) {
+        displayName = file.replace('Raw ', '');
+    } else if (file.startsWith('raw_')) {
+        // Handle other raw formats
+        displayName = file.replace('raw_', '').replace('segmented_recording_', 'Segmented Recording ');
+    }
     
     // Use the filename as the unique card ID
     const cardId = `processing-${btoa(file).replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -255,7 +276,7 @@ function createProcessingCard(file) {
                 <div class="processing-preview mb-3 flex-grow-1 d-flex align-items-center justify-content-center">
                     <div class="text-center w-100">
                         <div class="processing-icon mb-3">
-                            <i class="fas fa-video fa-3x text-warning mb-2"></i>
+                            
                             <div class="spinner-border text-warning" role="status">
                                 <span class="visually-hidden">Processing...</span>
                             </div>
@@ -330,7 +351,7 @@ function startRealProgressPolling(cardId, file) {
                         progressStatus.innerHTML = `<i class='fas fa-times-circle me-1'></i>${status}`;
                     }
                     // Optionally, reload the recordings list after a short delay
-                    setTimeout(() => { loadRecordingsWithAutoRefresh(); }, 2000);
+                    setTimeout(() => { loadRecordingsWithAutoRefresh(); }, 100000);
                 }
             })
             .catch(() => {
@@ -738,14 +759,6 @@ document.addEventListener('DOMContentLoaded', function() {
     display: inline-block;
 }
 
-.processing-icon .spinner-border {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 2rem;
-    height: 2rem;
-}
 
 .progress-container {
     width: 100%;

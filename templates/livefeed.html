@@ -9,54 +9,428 @@ Live Feed
     <h2 class="text-center mb-4">Live Feed</h2>
     <div class="row">
         <div class="col-md-8">
-            <div class="video-container">
-                <img src="{{ url_for('video_feed') }}" width="100%" alt="Live Feed">
+            <div class="video-container position-relative">
+                <!-- Safari-compatible video display -->
+                <canvas id="videoCanvas" style="display: none; width: 150%; height: auto;" alt="Live Feed"></canvas>
+                <!-- Chrome/Firefox multipart stream -->
+                <img id="videoImg" src="{{ url_for('video_feed') }}" width="150%" alt="Live Feed">
             </div>
         </div>
         <div class="col-md-4">
-            <div class="controls p-4 bg-light rounded shadow-sm">
-                <h4 class="mb-4">Controls</h4>
+            <div class="controls-container">
+                <div class="controls-header">
+                    <h3><i class="fas fa-sliders-h"></i> Controls</h3>
+                </div>
                 
-                <!-- Activity Recognition Toggle -->
-                <div class="control-item mb-4">
-                    <label class="control-label">Human Activity Recognition</label>
-                    <div class="toggle-switch">
-                        <input type="checkbox" id="activityToggle" class="toggle-input">
-                        <label for="activityToggle" class="toggle-label"></label>
+                <div class="control-grid">
+                    <!-- Activity Recognition Card -->
+                    <div class="control-card">
+                        <div class="control-icon">
+                            <i class="fas fa-running"></i>
+                        </div>
+                        <div class="control-content">
+                            <h4>Activity Recognition</h4>
+                            <p>Human motion detection and analysis</p>
+                            <div class="control-action">
+                                <label class="modern-toggle">
+                                    <input type="checkbox" id="activityToggle">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="status-text" id="activityStatus">Disabled</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recording Card -->
+                    <div class="control-card">
+                        <div class="control-icon recording-icon">
+                            <i class="fas fa-video"></i>
+                        </div>
+                        <div class="control-content">
+                            <h4>Dual Recording</h4>
+                            <p>Capture original and processed streams</p>
+                            <div class="control-action">
+                                <button id="recordingToggle" class="modern-record-btn">
+                                    <i class="fas fa-circle"></i>
+                                    <span>Start Recording</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Recording Button -->
-                <div class="control-item mb-4">
-                    <label class="control-label">Recording (Dual Output)</label>
-                    <div class="record-button-container">
-                        <button id="recordingToggle" class="record-button">
-                            <span class="record-icon"></span>
+                <!-- Recording Status Banner -->
+                <div id="recordingStatus" class="recording-banner" style="display: none;">
+                    <div class="banner-content">
+                        <div class="pulse-dot"></div>
+                        <span>Recording in progress - Dual output active</span>
+                        <div class="recording-time" id="recordingTime">00:00</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Activity Logs Section -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="logs-container">
+                <div class="logs-header">
+                    <h4><i class="fas fa-list-alt"></i> Activity Detection Logs</h4>
+                    <div class="logs-controls">
+                        <button id="clearLogs" class="btn-clear-logs">
+                            <i class="fas fa-trash"></i> Clear
+                        </button>
+                        <button id="pauseLogs" class="btn-pause-logs">
+                            <i class="fas fa-pause"></i> Pause
                         </button>
                     </div>
-                    <small class="text-muted">Records both original and segmented versions simultaneously</small>
                 </div>
-
-                <!-- Recording Status -->
-                <div id="recordingStatus" class="alert alert-warning" style="display: none;">
-                    <i class="fas fa-circle text-warning me-2"></i>
-                    Recording in progress (creating dual outputs)...
+                <div class="logs-content" id="logsContent">
+                    <div class="log-entry initial-message">
+                        <span class="log-time">Ready</span>
+                        <span class="log-message">Activity detection logs will appear here...</span>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
+<!-- Fixed Position Connection Status -->
+<div id="connectionStatusUI" class="connection-status-ui-fixed">
+    <span id="conn-status-dot" class="dot"></span>
+    <span id="conn-status-text">Connecting...</span>
+</div>
+
 <script>
+// Safari compatibility fix for video feed
+function isSafari() {
+    return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+}
+
+function setupVideoFeed() {
+    const videoCanvas = document.getElementById('videoCanvas');
+    const videoImg = document.getElementById('videoImg');
+    
+    if (isSafari()) {
+        console.log('Safari detected - using canvas-based video feed');
+        
+        // Hide img element and show canvas for Safari
+        videoImg.style.display = 'none';
+        videoCanvas.style.display = 'block';
+        
+        const ctx = videoCanvas.getContext('2d');
+        let isLoading = false;
+        
+        function fetchAndDrawFrame() {
+            if (isLoading) return;
+            isLoading = true;
+            
+            fetch('/video_frame')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const img = new Image();
+                    img.onload = function() {
+                        // Set canvas size to match image
+                        videoCanvas.width = img.width;
+                        videoCanvas.height = img.height;
+                        
+                        // Clear and draw new frame
+                        ctx.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
+                        ctx.drawImage(img, 0, 0);
+                        
+                        URL.revokeObjectURL(img.src);
+                        isLoading = false;
+                        
+                        // Schedule next frame
+                        setTimeout(fetchAndDrawFrame, 100); // ~10 FPS for Safari
+                    };
+                    img.onerror = function() {
+                        console.error('Failed to load frame image');
+                        isLoading = false;
+                        setTimeout(fetchAndDrawFrame, 500); // Retry after delay
+                    };
+                    img.src = URL.createObjectURL(blob);
+                })
+                .catch(error => {
+                    console.error('Error fetching video frame:', error);
+                    isLoading = false;
+                    setTimeout(fetchAndDrawFrame, 1000); // Retry after longer delay
+                });
+        }
+        
+        // Start frame fetching for Safari
+        fetchAndDrawFrame();
+        
+    } else {
+        console.log('Non-Safari browser detected - using multipart stream');
+        // For Chrome/Firefox, keep the img element visible
+        videoImg.style.display = 'block';
+        videoCanvas.style.display = 'none';
+        
+        // Add error handling for img element
+        videoImg.onerror = function() {
+            console.error('Video feed connection lost, attempting to reconnect...');
+            setTimeout(() => {
+                videoImg.src = "{{ url_for('video_feed') }}?" + Date.now();
+            }, 1000);
+        };
+    }
+}
+
+function updateConnectionStatusUI(status) {
+    const dot = document.getElementById('conn-status-dot');
+    const text = document.getElementById('conn-status-text');
+    if (!status) {
+        dot.style.background = '#ccc';
+        text.textContent = 'Unknown';
+        return;
+    }
+    if (status.connected) {
+        dot.style.background = '#28a745';
+        // Show connection latency in ms instead of fps
+        let latencyMs = status.speed > 0 ? (100000 / status.speed).toFixed(1) : 'N/A';
+        text.textContent = `Connected (${latencyMs} ms)`;
+    } else {
+        dot.style.background = '#dc3545';
+        text.textContent = 'Disconnected';
+        if (status.error) text.textContent += ` (${status.error})`;
+    }
+}
+
+function pollConnectionStatus() {
+    fetch('/connection_status')
+        .then(r => r.json())
+        .then(updateConnectionStatusUI)
+        .catch(() => updateConnectionStatusUI(null));
+}
+
+// Activity Logs functionality
+let logsPaused = false;
+let logsContent;
+let clearLogsBtn;
+let pauseLogsBtn;
+let clientId = null;
+let logsInitialized = false;
+
+function addLogEntry(timestamp, employeeId, actions) {
+    if (logsPaused) {
+        console.log('Logs paused, skipping entry');
+        return;
+    }
+    
+    console.log('Adding log entry - START:', { timestamp, employeeId, actions });
+    console.log('logsContent element:', logsContent);
+    
+    if (!logsContent) {
+        console.error('logsContent element not found!');
+        return;
+    }
+    
+    const logEntry = document.createElement('div');
+    logEntry.className = 'log-entry';
+    
+    const date = new Date(timestamp);
+    const timeStr = date.toLocaleDateString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: '2-digit'
+    }) + '::' + date.toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+    
+    const actionsStr = actions && actions.length > 0 ? actions.join(', ') : 'No activities detected';
+    
+    console.log('Creating log entry with time:', timeStr, 'employee:', employeeId, 'actions:', actionsStr);
+    
+    logEntry.innerHTML = `
+        <span class="log-time">${timeStr}</span>
+        <span class="log-employee">Employee [${employeeId}]</span>
+        <span class="log-actions">${actionsStr}</span>
+    `;
+    
+    // Remove initial message if present
+    const initialMessage = logsContent.querySelector('.initial-message');
+    if (initialMessage) {
+        console.log('Removing initial message');
+        initialMessage.remove();
+    }
+    
+    // Add new entry at the top
+    logsContent.insertBefore(logEntry, logsContent.firstChild);
+    console.log('Log entry added to DOM successfully');
+    
+    // Force a visual update
+    logsContent.scrollTop = 0;
+    
+    // Limit to 100 entries in UI (server keeps more)
+    const entries = logsContent.querySelectorAll('.log-entry');
+    if (entries.length > 100) {
+        entries[entries.length - 1].remove();
+    }
+    
+    // Add animation
+    logEntry.style.opacity = '0';
+    logEntry.style.transform = 'translateY(-10px)';
+    setTimeout(() => {
+        logEntry.style.transition = 'all 0.3s ease';
+        logEntry.style.opacity = '1';
+        logEntry.style.transform = 'translateY(0)';
+    }, 10);
+}
+
+function loadAllActivityLogs() {
+    console.log('Loading all activity logs...');
+    // Load all existing logs when page loads
+    fetch('/activity_logs?load_all=true')
+        .then(response => response.json())
+        .then(data => {
+            console.log('Initial activity logs response:', data);
+            if (data.success) {
+                clientId = data.client_id;
+                console.log('Client ID set to:', clientId);
+                if (data.logs && data.logs.length > 0) {
+                    console.log(`Loading ${data.logs.length} existing logs`);
+                    // Clear initial message
+                    const initialMessage = logsContent.querySelector('.initial-message');
+                    if (initialMessage) {
+                        initialMessage.remove();
+                    }
+                    
+                    // Add logs in reverse order (newest first)
+                    data.logs.reverse().forEach(log => {
+                        addLogEntry(log.timestamp, log.employee_id, log.actions);
+                    });
+                } else {
+                    console.log('No existing logs found');
+                }
+                logsInitialized = true;
+                console.log('Activity logs initialized');
+            } else {
+                console.error('Failed to load activity logs:', data.error);
+                logsInitialized = true;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading activity logs:', error);
+            logsInitialized = true;
+        });
+}
+
+function pollActivityLogs() {
+    if (logsPaused) {
+        console.log('Activity logs polling paused');
+        return;
+    }
+    
+    if (!logsInitialized) {
+        console.log('Activity logs not yet initialized, skipping poll');
+        return;
+    }
+    
+    console.log('Polling for new activity logs... Client ID:', clientId);
+    
+    // Only poll for new logs after initial load
+    fetch('/activity_logs')
+        .then(response => {
+            console.log('Activity logs response status:', response.status);
+            return response.json();
+        })
+        .then(data => {
+            console.log('Activity logs polling response:', data);
+            if (data.success && data.logs && data.logs.length > 0) {
+                console.log(`Found ${data.logs.length} new log entries, adding to UI`);
+                data.logs.forEach((log, index) => {
+                    console.log(`Adding log ${index + 1}:`, log);
+                    addLogEntry(log.timestamp, log.employee_id, log.actions);
+                });
+            } else {
+                console.log('No new activity logs found in polling response');
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching activity logs during polling:', error);
+        });
+}
+
+function clearLogs() {
+    // Send request to server to clear logs
+    fetch('/clear_activity_logs', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Clear UI
+            logsContent.innerHTML = `
+                <div class="log-entry initial-message">
+                    <span class="log-time">Ready</span>
+                    <span class="log-message">Activity detection logs will appear here...</span>
+                </div>
+            `;
+        } else {
+            console.error('Failed to clear logs:', data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error clearing logs:', error);
+    });
+}
+
+function toggleLogsPause() {
+    logsPaused = !logsPaused;
+    const icon = pauseLogsBtn.querySelector('i');
+    const text = pauseLogsBtn.querySelector('span');
+    
+    if (logsPaused) {
+        icon.className = 'fas fa-play';
+        if (text) text.textContent = 'Resume';
+        pauseLogsBtn.classList.add('paused');
+    } else {
+        icon.className = 'fas fa-pause';
+        if (text) text.textContent = 'Pause';
+        pauseLogsBtn.classList.remove('paused');
+    }
+}
+
+setInterval(pollConnectionStatus, 1000);
 document.addEventListener('DOMContentLoaded', function() {
+    pollConnectionStatus();
+    setupVideoFeed(); // Initialize Safari-compatible video feed
+});
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize logs elements
+    logsContent = document.getElementById('logsContent');
+    clearLogsBtn = document.getElementById('clearLogs');
+    pauseLogsBtn = document.getElementById('pauseLogs');
+    
+    // Load existing activity logs on page load
+    loadAllActivityLogs();
+    
     // Activity Recognition Toggle
     const activityToggle = document.getElementById('activityToggle');
+    const activityStatus = document.getElementById('activityStatus');
     
     // Check initial state
     fetch('/activity_status')
         .then(response => response.json())
         .then(data => {
             activityToggle.checked = data.active;
+            activityStatus.textContent = data.active ? 'Enabled' : 'Disabled';
+            activityStatus.classList.toggle('active', data.active);
         });
     
     activityToggle.addEventListener('change', function() {
@@ -66,21 +440,60 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             activityToggle.checked = data.active;
+            activityStatus.textContent = data.active ? 'Enabled' : 'Disabled';
+            activityStatus.classList.toggle('active', data.active);
         });
     });
 
     // Recording Toggle (Dual Output)
     const recordingToggle = document.getElementById('recordingToggle');
     const recordingStatus = document.getElementById('recordingStatus');
+    const recordingTime = document.getElementById('recordingTime');
+    let recordingStartTime = null;
+    let recordingTimer = null;
+    
+    // Recording timer function
+    function updateRecordingTime() {
+        if (recordingStartTime) {
+            const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = elapsed % 60;
+            recordingTime.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+    }
     
     // Check initial recording state
     fetch('/recording_status')
         .then(response => response.json())
         .then(data => {
             const isRecording = data.original || data.segmented;
-            recordingToggle.classList.toggle('recording', isRecording);
-            recordingStatus.style.display = isRecording ? 'block' : 'none';
+            updateRecordingUI(isRecording);
         });
+    
+    function updateRecordingUI(isRecording) {
+        recordingToggle.classList.toggle('recording', isRecording);
+        recordingStatus.style.display = isRecording ? 'block' : 'none';
+        
+        // Update button text and icon
+        const icon = recordingToggle.querySelector('i');
+        const text = recordingToggle.querySelector('span');
+        
+        if (isRecording) {
+            icon.className = 'fas fa-stop';
+            text.textContent = 'Stop Recording';
+            recordingStartTime = Date.now();
+            recordingTimer = setInterval(updateRecordingTime, 1000);
+        } else {
+            icon.className = 'fas fa-circle';
+            text.textContent = 'Start Recording';
+            recordingStartTime = null;
+            if (recordingTimer) {
+                clearInterval(recordingTimer);
+                recordingTimer = null;
+            }
+            recordingTime.textContent = '00:00';
+        }
+    }
     
     // Recording Toggle - starts/stops both recordings simultaneously
     recordingToggle.addEventListener('click', function() {
@@ -89,10 +502,22 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(response => response.json())
         .then(data => {
-            recordingToggle.classList.toggle('recording', data.recording);
-            recordingStatus.style.display = data.recording ? 'block' : 'none';
+            updateRecordingUI(data.recording);
         });
     });
+    
+    // Logs event listeners
+    clearLogsBtn.addEventListener('click', clearLogs);
+    pauseLogsBtn.addEventListener('click', toggleLogsPause);
+    
+    // Test function to add a sample log entry
+    window.testAddLog = function() {
+        console.log('Testing log addition...');
+        addLogEntry(new Date().toISOString(), 'EMP_001', ['walking', 'talking']);
+    };
+    
+    // Start polling for new activity logs every 1 second (after initial load)
+    setInterval(pollActivityLogs, 1000);
 });
 </script>
 
@@ -224,6 +649,21 @@ document.addEventListener('DOMContentLoaded', function() {
     border-radius: 10px;
     overflow: hidden;
     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 800px;
+}
+
+@media (max-width: 768px) {
+    .video-container {
+        width: 100%;
+        max-width: none;
+    }
+}
+
+@media (min-width: 1200px) {
+    .video-container {
+        max-width: 1000px;
+    }
 }
 
 /* Recording Status Alert */
@@ -240,6 +680,457 @@ document.addEventListener('DOMContentLoaded', function() {
 @keyframes blink {
     50% {
         opacity: 0.5;
+    }
+}
+
+/* Fixed Position Connection Status UI */
+.connection-status-ui-fixed {
+    position: fixed;
+    bottom: 20px;          /* Distance from the bottom of the viewport */
+    left: 20px;            /* Distance from the left of the viewport */
+    width: 250px;
+    height: 40px;
+    background: rgba(255,255,255,0.95);
+    border-radius: 20px;
+    padding: 6px 16px 6px 10px;
+    display: flex;
+    align-items: center;
+    font-weight: 500;
+    font-size: 1rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 1000;
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.connection-status-ui-fixed .dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    margin-right: 10px;
+    background: #ccc;
+    display: inline-block;
+    transition: background 0.3s;
+}
+
+/* Responsive adjustments for fixed position */
+@media (max-width: 768px) {
+    .connection-status-ui-fixed {
+        top: 10px;
+        left: 10px;
+        width: 180px;
+        font-size: 0.9rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .connection-status-ui-fixed {
+        width: 160px;
+        font-size: 0.8rem;
+        padding: 4px 12px 4px 8px;
+        height: 36px;
+    }
+    
+    .connection-status-ui-fixed .dot {
+        width: 12px;
+        height: 12px;
+        margin-right: 8px;
+    }
+}
+
+/* Modern Controls Interface */
+.controls-container {
+    background: linear-gradient(145deg, #ffffff, #f8fafc);
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(229, 231, 235, 0.5);
+    
+    height: 638px;       /* Fixed height */
+    max-height: 80vh;    /* Maximum height (80% of viewport) */
+    min-height: 400px;   /* Minimum height */
+    
+}
+
+.controls-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 2px solid #e5e7eb;
+}
+
+.controls-header h3 {
+    color: #1f2937;
+    font-weight: 700;
+    font-size: 20px;
+    margin: 0;
+}
+
+.controls-header i {
+    margin-right: 12px;
+    color: #3b82f6;
+}
+
+.control-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.control-card {
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 20px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.control-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+.control-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: white;
+    background: linear-gradient(145deg, #3b82f6, #1d4ed8);
+    flex-shrink: 0;
+}
+
+.recording-icon {
+    background: linear-gradient(145deg, #dc2626, #b91c1c);
+}
+
+.control-content {
+    flex: 1;
+}
+
+.control-content h4 {
+    color: #1f2937;
+    font-weight: 600;
+    font-size: 16px;
+    margin: 0 0 4px 0;
+}
+
+.control-content p {
+    color: #6b7280;
+    font-size: 14px;
+    margin: 0 0 12px 0;
+}
+
+.control-action {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* Modern Toggle Switch */
+.modern-toggle {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.modern-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #cbd5e1;
+    border-radius: 24px;
+    transition: 0.3s;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    border-radius: 50%;
+    transition: 0.3s;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.modern-toggle input:checked + .toggle-slider {
+    background-color: #10b981;
+}
+
+.modern-toggle input:checked + .toggle-slider:before {
+    transform: translateX(26px);
+}
+
+.status-text {
+    font-weight: 500;
+    font-size: 14px;
+    color: #6b7280;
+}
+
+.status-text.active {
+    color: #10b981;
+}
+
+/* Modern Record Button */
+.modern-record-btn {
+    background: linear-gradient(145deg, #dc2626, #b91c1c);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 10px 16px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.modern-record-btn:hover {
+    background: linear-gradient(145deg, #b91c1c, #991b1b);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+
+.modern-record-btn.recording {
+    background: linear-gradient(145deg, #6b7280, #4b5563);
+    animation: recordingPulse 2s infinite;
+}
+
+.modern-record-btn.recording i {
+    color: #ef4444;
+}
+
+@keyframes recordingPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+    50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+}
+
+/* Recording Status Banner */
+.recording-banner {
+    background: linear-gradient(145deg, #dc2626, #b91c1c);
+    color: white;
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 20px;
+    animation: slideIn 0.3s ease;
+}
+
+.banner-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 500;
+}
+
+.pulse-dot {
+    width: 8px;
+    height: 8px;
+    background-color: #fef2f2;
+    border-radius: 50%;
+    margin-right: 8px;
+    animation: pulse 1s infinite;
+}
+
+.recording-time {
+    font-family: 'Courier New', monospace;
+    font-weight: 700;
+    font-size: 16px;
+    background: rgba(255, 255, 255, 0.2);
+    padding: 4px 12px;
+    border-radius: 8px;
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Activity Logs Styles */
+.logs-container {
+    background: linear-gradient(145deg, #ffffff, #f8fafc);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(229, 231, 235, 0.5);
+    margin-top: 20px;
+}
+
+.logs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #e5e7eb;
+}
+
+.logs-header h4 {
+    color: #1f2937;
+    font-weight: 600;
+    font-size: 18px;
+    margin: 0;
+}
+
+.logs-header i {
+    color: #059669;
+    margin-right: 8px;
+}
+
+.logs-controls {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-clear-logs,
+.btn-pause-logs {
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
+    color: #374151;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.btn-clear-logs:hover {
+    background: #ef4444;
+    color: white;
+    border-color: #dc2626;
+}
+
+.btn-pause-logs:hover {
+    background: #3b82f6;
+    color: white;
+    border-color: #2563eb;
+}
+
+.btn-pause-logs.paused {
+    background: #10b981;
+    color: white;
+    border-color: #059669;
+}
+
+.logs-content {
+    background: #f9fafb;
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #e5e7eb;
+}
+
+.log-entry {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    margin-bottom: 4px;
+    background: white;
+    border-radius: 6px;
+    border-left: 3px solid #10b981;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.log-entry.initial-message {
+    color: #6b7280;
+    font-style: italic;
+    border-left-color: #d1d5db;
+    justify-content: center;
+}
+
+.log-time {
+    color: #374151;
+    font-weight: 600;
+    min-width: 140px;
+    margin-right: 12px;
+}
+
+.log-employee {
+    color: #059669;
+    font-weight: 600;
+    min-width: 100px;
+    margin-right: 12px;
+}
+
+.log-actions {
+    color: #1f2937;
+    flex: 1;
+}
+
+.log-message {
+    color: #6b7280;
+    flex: 1;
+}
+
+/* Custom scrollbar for logs */
+.logs-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.logs-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+.logs-content::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+.logs-content::-webkit-scrollbar-thumb:hover {
+    background: #a1a1a1;
+}
+
+/* Responsive design for logs */
+@media (max-width: 768px) {
+    .logs-header {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+    }
+    
+    .log-entry {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+    
+    .log-time,
+    .log-employee {
+        min-width: auto;
+        margin-right: 0;
+    }
+    
+    .logs-content {
+        max-height: 200px;
     }
 }
 </style>

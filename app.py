@@ -2,6 +2,8 @@ from flask import Flask, render_template, Response, jsonify, request, send_from_
 import sys
 import os
 from datetime import datetime
+from werkzeug.utils import secure_filename
+import uuid
 sys.path.append(os.path.join(os.path.dirname(__file__), 'backend', 'har'))
 import backend.har.livefeed as livefeed
 from functools import wraps
@@ -15,6 +17,18 @@ import time
 
 app = Flask(__name__)
 app.config.from_object(Config)
+
+# Configure file upload settings
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'static', 'uploads', 'employee_photos')
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+
+# Create upload directory if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 db.init_app(app)
 
 # Create database tables
@@ -39,6 +53,11 @@ def set_postprocess_progress(recording_id, percent, status=None):
 def get_postprocess_progress(recording_id):
     with postprocess_progress_lock:
         return postprocess_progress.get(recording_id, {'percent': 0, 'status': 'Queued'})
+
+# @app.route('/postprocess_progress/<recording_id>')
+# def postprocess_progress_status(recording_id):
+#     progress = get_postprocess_progress(recording_id)
+#     return jsonify(progress)
 
 # Login required decorator
 def login_required(f):
@@ -133,6 +152,19 @@ def video_feed():
                 time.sleep(0.01)  # Reduced from 0.05 to make it more responsive
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/video_frame')
+def video_frame():
+    """Serve a single video frame for Safari compatibility"""
+    frame = livefeed.get_latest_frame()
+    if frame is not None:
+        return Response(frame, mimetype='image/jpeg')
+    else:
+        # Return a small placeholder image if no frame available
+        import base64
+        # 1x1 transparent PNG
+        placeholder = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQIHWNgAAIAAAUAAY27m/MAAAAASUVORK5CYII=')
+        return Response(placeholder, mimetype='image/png')
+
 @app.route('/activity_status')
 def activity_status():
     return jsonify({"active": livefeed.get_activity_recognition_state()})
@@ -216,12 +248,14 @@ def list_recordings():
         original_files = [f for f in os.listdir(recordings_dir)
                          if f.endswith(('.mp4', '.avi'))
                          and os.path.isfile(os.path.join(recordings_dir, f))
-                         and not f.startswith('raw_segmented_recording_')]
+                         and not f.startswith('raw_segmented_recording_')
+                         and not f.startswith('Raw Segmented Recording ')]
         files.extend(original_files)
 
-        # Check for raw segmented files that are being processed
+        # Check for raw segmented files that are being processed (both old and new formats)
         raw_files = [f for f in os.listdir(recordings_dir)
-                    if f.startswith('raw_segmented_recording_') and f.endswith(('.mp4', '.avi'))]
+                    if (f.startswith('raw_segmented_recording_') or f.startswith('Raw Segmented Recording ')) 
+                    and f.endswith(('.mp4', '.avi'))]
         processing_files.extend(raw_files)
 
     # Get segmented recordings
@@ -303,6 +337,27 @@ def delete_recording(filename):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+# File upload helper functions
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def save_uploaded_photo(file):
+    """Save uploaded photo and return the URL path"""
+    if file and allowed_file(file.filename):
+        # Generate unique filename
+        filename = secure_filename(file.filename)
+        file_extension = filename.rsplit('.', 1)[1].lower()
+        unique_filename = f"{uuid.uuid4().hex}.{file_extension}"
+        
+        # Save file
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        file.save(file_path)
+        
+        # Return relative URL path
+        return f"/static/uploads/employee_photos/{unique_filename}"
+    return None
+
 # Employee CRUD routes
 @app.route('/api/employees', methods=['GET'])
 @login_required
@@ -319,7 +374,26 @@ def get_employee(id):
 @app.route('/api/employees', methods=['POST'])
 @login_required
 def create_employee():
-    data = request.json
+    # Handle both JSON and form data (with file uploads)
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        # Handle form data with file upload
+        data = request.form.to_dict()
+        
+        # Handle photo upload
+        photo_url = None
+        if 'photoFile' in request.files:
+            file = request.files['photoFile']
+            if file.filename:
+                photo_url = save_uploaded_photo(file)
+        
+        # Use photoUrl if no file was uploaded
+        if not photo_url and data.get('photoUrl'):
+            photo_url = data.get('photoUrl')
+            
+    else:
+        # Handle JSON data
+        data = request.json
+        photo_url = data.get('photoUrl')
     
     # Convert hire_date string to date object
     hire_date = datetime.strptime(data['hireDate'], '%Y-%m-%d').date()
@@ -327,7 +401,7 @@ def create_employee():
     employee = Employee(
         employee_id=data['employeeId'],
         full_name=data['fullName'],
-        photo_url=data.get('photoUrl'),
+        photo_url=photo_url,
         role=data['role'],
         hire_date=hire_date,
         email=data['email'],
@@ -348,7 +422,30 @@ def create_employee():
 @login_required
 def update_employee(id):
     employee = Employee.query.get_or_404(id)
-    data = request.json
+    
+    # Handle both JSON and form data (with file uploads)
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        # Handle form data with file upload
+        data = request.form.to_dict()
+        
+        # Handle photo upload
+        photo_url = None
+        if 'photoFile' in request.files:
+            file = request.files['photoFile']
+            if file.filename:
+                photo_url = save_uploaded_photo(file)
+        
+        # Use photoUrl if no file was uploaded
+        if not photo_url and data.get('photoUrl'):
+            photo_url = data.get('photoUrl')
+            
+        # Update photo URL if we have one
+        if photo_url:
+            data['photoUrl'] = photo_url
+            
+    else:
+        # Handle JSON data
+        data = request.json
 
     # Map camelCase keys to snake_case for model attributes
     key_map = {
@@ -420,17 +517,136 @@ def clear_employee_captures():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/static/uploads/employee_photos/<filename>')
+def uploaded_file(filename):
+    """Serve uploaded employee photos"""
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route('/employee_captures/<path:filename>')
 @login_required
 def serve_employee_capture(filename):
-    # Serve from backend/employee_act, including subdirectories
-    employee_act_dir = os.path.join(os.path.dirname(__file__), 'backend', 'employee_act')
-    return send_from_directory(employee_act_dir, filename)
+    """Serve employee capture images from the employee_act directory"""
+    try:
+        backend_dir = os.path.join(os.path.dirname(__file__), 'backend')
+        employee_act_dir = os.path.join(backend_dir, 'employee_act')
+        
+        # The filename comes in format like "20250601_050442\employee_EMP_001_20250601_050442.jpg"
+        # We need to replace backslashes with forward slashes for proper path handling
+        filename = filename.replace('\\', '/')
+        
+        # Split the path to get folder and actual filename
+        if '/' in filename:
+            folder_name, actual_filename = filename.rsplit('/', 1)
+            file_path = os.path.join(employee_act_dir, folder_name, actual_filename)
+            serve_dir = os.path.join(employee_act_dir, folder_name)
+        else:
+            # If no folder, serve directly from employee_act_dir
+            file_path = os.path.join(employee_act_dir, filename)
+            serve_dir = employee_act_dir
+            actual_filename = filename
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            print(f"Employee capture file not found: {file_path}")
+            return "File not found", 404
+        
+        print(f"Serving employee capture: {filename} from {file_path}")
+        
+        return send_from_directory(
+            serve_dir, 
+            actual_filename,
+            mimetype='image/jpeg',
+            as_attachment=False
+        )
+    except Exception as e:
+        print(f"Error serving employee capture {filename}: {str(e)}")
+        return f"Error serving file: {str(e)}", 500
 
 @app.route('/api/postprocess_progress/<recording_id>')
 def api_postprocess_progress(recording_id):
     progress = get_postprocess_progress(recording_id)
     return jsonify(progress)
+
+@app.route('/connection_status')
+def connection_status():
+    from backend.har.livefeed import video_manager
+    status = video_manager.get_connection_status()
+    return jsonify(status)
+
+@app.route('/activity_logs')
+@login_required
+def activity_logs():
+    """Get activity logs for display in the live feed interface"""
+    try:
+        import uuid
+        
+        # Generate or get client session ID
+        client_id = session.get('client_id')
+        if not client_id:
+            client_id = str(uuid.uuid4())
+            session['client_id'] = client_id
+        
+        # Check if this is a request for all logs (initial load)
+        load_all = request.args.get('load_all', 'false').lower() == 'true'
+        
+        if load_all:
+            # Return all logs for initial page load
+            logs = livefeed.get_all_activity_logs()
+        else:
+            # Return only new logs since last request
+            logs = livefeed.get_recent_activity_logs(client_id)
+        
+        return jsonify({
+            "success": True,
+            "logs": logs,
+            "client_id": client_id
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "logs": [], 
+            "error": str(e)
+        })
+
+@app.route('/clear_activity_logs', methods=['POST'])
+@login_required
+def clear_activity_logs():
+    """Clear all activity logs"""
+    try:
+        success = livefeed.clear_activity_logs()
+        return jsonify({
+            "success": success,
+            "message": "Activity logs cleared successfully" if success else "Failed to clear logs"
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
+@app.route('/test_activity_log', methods=['POST'])
+@login_required
+def test_activity_log():
+    """Test route to generate a sample activity log"""
+    try:
+        # Generate a test log entry
+        import datetime
+        test_detections = {
+            'EMP_001': ['walking', 'talking', 'using_phone']
+        }
+        
+        # Call the logging function directly
+        livefeed.log_activity_detection_simple(test_detections)
+        
+        return jsonify({
+            "success": True,
+            "message": "Test activity log generated"
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
 
 # Global monitoring state
 monitoring_active = False
@@ -472,6 +688,26 @@ def stop_employee_monitoring():
 @app.route('/employee_monitoring_status')
 def employee_monitoring_status():
     return jsonify({"monitoring": monitoring_active})
+
+@app.route('/active_employees')
+@login_required
+def get_active_employees():
+    """Get current count of active employees"""
+    try:
+        result = livefeed.get_active_employees_count()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"active_employees": 0}), 500
+
+@app.route('/api/active_employees')
+@login_required
+def api_active_employees():
+    """API endpoint for active employees count"""
+    try:
+        result = livefeed.get_active_employees_count()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"active_employees": 0}), 500
 
 @app.route('/employee_act_dir')
 @login_required

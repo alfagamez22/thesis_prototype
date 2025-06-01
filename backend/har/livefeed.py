@@ -1,19 +1,19 @@
-import argparse
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
-import time
-import json
-import datetime
-import threading
-import traceback
-from typing import List, Dict, Tuple, Optional
-import collections
-
-import numpy as np
 import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms as transforms
+import argparse
+import time
+import threading
+import datetime
+import json
+import collections
+import sys
+import traceback
+from typing import List, Dict, Tuple, Optional
 from PIL import Image
 from torchvision.transforms import v2
 
@@ -40,8 +40,9 @@ class Config:
         parser.add_argument("-delay", type=int, default=30, help="frame delay amount")
         parser.add_argument("-fps", type=int, default=10, help="target frames per second")
         parser.add_argument("-det_freq", type=int, default=6, help="detection frequency (every N frames)")
-        #parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
-        parser.add_argument("-F", type=str, default="<REPLACE> rtsp://username:password@tunnelip:8554/stream2?tcp <REPLACE>", help="file path for video input") #rtsp://username:password@tunnelip:8554/stream2?tcp
+    #    parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
+        # parser.add_argument("-F", type=str, default="<REPLACE> rtsp://username:password@tunnelip:8554/stream2?tcp <REPLACE>", help="file path for video input") #rtsp://username:password@tunnelip:8554/stream2?tcp
+        
         parser.add_argument("-roi", type=str, default=None, help="Path to ROI coordinates JSON")
         # Optimize: Only parse args if run as main, otherwise use defaults (empty list)
         self.args = parser.parse_args([])
@@ -299,15 +300,15 @@ class VideoManager:
             
     def setup_recording(self, recording_type="original"):
         """Setup video recording for either original or segmented recording"""
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d __ %I-%M-%S_%p")
         recordings_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "recordings")
         if not os.path.exists(recordings_dir):
             os.makedirs(recordings_dir)
 
         if recording_type == "segmented":
-            output_path = os.path.join(recordings_dir, f"raw_segmented_recording_{timestamp}.mp4")
+            output_path = os.path.join(recordings_dir, f"Raw Segmented Recording {timestamp}.mp4")
         else:
-            output_path = os.path.join(recordings_dir, f"original_recording_{timestamp}.mp4")
+            output_path = os.path.join(recordings_dir, f"Original Recording {timestamp}.mp4")
 
         mp4_codecs = ['mp4v', 'X264', 'avc1']
         success = False
@@ -403,7 +404,13 @@ class VideoManager:
             
             # Generate output path for processed video
             filename = os.path.basename(raw_recording_path)
-            processed_filename = filename.replace("raw_segmented_recording_", "segmented_recording_")
+            # Handle both old and new raw filename formats
+            if filename.startswith("raw_segmented_recording_"):
+                processed_filename = filename.replace("raw_segmented_recording_", "Segmented Recording ")
+            elif filename.startswith("Raw Segmented Recording "):
+                processed_filename = filename.replace("Raw ", "")
+            else:
+                processed_filename = filename
             processed_path = os.path.join(segmented_dir, processed_filename)
 
             # Import and run auto.py processing
@@ -637,6 +644,13 @@ class VideoManager:
         if self.frame_count % 50 == 0 and torch.cuda.is_available():
             torch.cuda.empty_cache()
             
+        # Log activity detection for persons in ROI with detected actions
+        if (self.model_manager.activity_recognition_on and 
+            person_actions and 
+            person_count > 0):
+            # Log activities using the existing function signature
+            log_activity_detection(person_detections, person_actions, roi_to_original_mapping)
+            
         return out_frame
         
     def start_background_video_thread(self):
@@ -648,26 +662,54 @@ class VideoManager:
             self.video_thread_started = True
         
     def _video_background_worker(self):
-        """Worker function for background video processing"""
-        cap = cv2.VideoCapture(self.config.args.F if self.config.args.F else 0)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
-        if not cap.isOpened():
-            raise RuntimeError(f"Cannot open video source: {self.config.args.F if self.config.args.F else 0}")
-            
-        try:
-            while True:
-                frame_start_time = time.time()
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    break
-
-                # Add frame to delay buffer with timestamp
-                self.delay_buffer.append((frame, time.time()))
-
-                # Pop frames that have been in the buffer for at least delay_seconds
-                while self.delay_buffer and (time.time() - self.delay_buffer[0][1]) >= self.delay_seconds:
-                    delayed_frame, _ = self.delay_buffer.popleft()
-                    processed_frame = self.process_frame(delayed_frame)
+        """Worker function for background video processing with auto-reconnect on RTSP drop and connection speed status"""
+        import time
+        reconnect_interval = 0.01  # 10ms
+        video_source = self.config.args.F if self.config.args.F else 0
+        last_status = None
+        while True:
+            cap = cv2.VideoCapture(video_source)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 30)
+            connection_start = time.time()
+            if not cap.isOpened():
+                self.connection_status = {
+                    'connected': False,
+                    'speed': 0,
+                    'last_success': None,
+                    'error': 'Cannot open video source'
+                }
+                time.sleep(reconnect_interval)
+                continue
+            print(f"[LiveFeed] Video source opened: {video_source}")
+            self.connection_status = {
+                'connected': True,
+                'speed': 0,
+                'last_success': time.time(),
+                'error': None
+            }
+            try:
+                while True:
+                    frame_start_time = time.time()
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        print("[LiveFeed] Frame read failed, will reconnect.")
+                        self.connection_status = {
+                            'connected': False,
+                            'speed': 0,
+                            'last_success': self.connection_status.get('last_success'),
+                            'error': 'Frame read failed'
+                        }
+                        break
+                    # Calculate speed (fps)
+                    elapsed = time.time() - frame_start_time
+                    speed = 1.0 / elapsed if elapsed > 0 else 0
+                    self.connection_status = {
+                        'connected': True,
+                        'speed': speed,
+                        'last_success': time.time(),
+                        'error': None
+                    }
+                    processed_frame = self.process_frame(frame)
                     if processed_frame is not None:
                         try:
                             ret, jpeg = cv2.imencode('.jpg', processed_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -676,19 +718,28 @@ class VideoManager:
                                     self.latest_frame = jpeg.tobytes()
                         except Exception as e:
                             print(f"Error encoding frame: {e}")
+                    # Limit playback to target FPS
+                    target_frame_time = 1.0 / self.config.args.fps
+                    delay = max(0.001, target_frame_time - (time.time() - frame_start_time))
+                    time.sleep(delay)
+            except Exception as e:
+                print(f"[LiveFeed] Error occurred: {e}")
+                import traceback
+                traceback.print_exc()
+                self.connection_status = {
+                    'connected': False,
+                    'speed': 0,
+                    'last_success': self.connection_status.get('last_success'),
+                    'error': str(e)
+                }
+            finally:
+                cap.release()
+                print("[LiveFeed] Video thread cleanup complete. Will attempt to reconnect if needed.")
+            time.sleep(reconnect_interval)
 
-                # Limit playback to target FPS
-                elapsed = time.time() - frame_start_time
-                target_frame_time = 1.0 / self.config.args.fps
-                delay = max(0.001, target_frame_time - elapsed)
-                time.sleep(delay)
-        except Exception as e:
-            print(f"Error occurred: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            cap.release()
-            print("Video thread cleanup complete.")
+    def get_connection_status(self):
+        """Return the current connection status and speed for UI display"""
+        return getattr(self, 'connection_status', {'connected': False, 'speed': 0, 'last_success': None, 'error': 'Not started'})
             
     def get_latest_frame(self):
         """Get the latest processed frame"""
@@ -698,7 +749,7 @@ class VideoManager:
     def frame_generator(self):
         """Generator that yields processed frames as JPEG for Flask streaming"""
         cap = cv2.VideoCapture(self.config.args.F if self.config.args.F else 0)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 30)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video source: {self.config.args.F if self.config.args.F else 0}")
             
@@ -741,188 +792,144 @@ employee_act_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'emp
 if not os.path.exists(employee_act_dir):
     os.makedirs(employee_act_dir)
 
-def capture_employee_activity():
-    """Capture current frame with employee detection and activity recognition"""
+# Activity logs storage - persistent across sessions
+activity_logs = []
+activity_logs_lock = threading.Lock()
+# Track last delivered log index for each client session
+client_last_log_index = {}
+client_sessions_lock = threading.Lock()
+
+def log_activity_detection(person_detections, person_actions, roi_to_original_mapping):
+    """Log activity detections for the live feed logs"""
     try:
-        # Get current frame and detection results
-        current_frame = video_manager.current_frame
-        if current_frame is None:
-            return {"success": False, "error": "No current frame available"}
+        if not person_actions:
+            return
         
-        # Get current detections and activities
-        detections = getattr(video_manager, 'current_detections', [])
-        activities = getattr(video_manager, 'current_activities', {})
-        
-        if not detections:
-            return {"success": True, "employees_detected": 0, "message": "No employees detected in current frame"}
-        
-        # Get frame dimensions for quadrant calculation
-        h, w = current_frame.shape[:2]
-        center_x, center_y = w // 2, h // 2
-        
-        # Get ROI line coordinates from config
-        roi_line_p1 = (7, 299)
-        roi_line_p2 = (1253, 675)
-        
-        captured_employees = []
         timestamp = datetime.datetime.now()
-        timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
         
-        # Create timestamped folder only if we have valid captures
-        timestamp_folder = None
-        
-        for i, detection in enumerate(detections):
-            try:
-                # Extract bounding box coordinates
-                x1, y1, x2, y2 = map(int, detection[:4])
-                confidence = detection[4] if len(detection) > 4 else 0.0
-                
-                # Calculate center point of bounding box
-                cx = (x1 + x2) // 2
-                cy = (y1 + y2) // 2
-                
-                # Check if person is in ROI using the existing ROI line logic
-                if not is_on_active_side((cx, cy), roi_line_p1, roi_line_p2):
-                    continue  # Skip if not in ROI
-                
-                # Check if person is in quadrants 2 or 3 (left side of frame)
-                # Quadrant 2: x < center_x, y < center_y (left upper)
-                # Quadrant 3: x < center_x, y > center_y (left lower)
-                if cx >= center_x:
-                    continue  # Skip if in right quadrants (1 or 4)
-                
-                # Get activities for this detection
-                detection_activities = activities.get(i, [])
-                if isinstance(detection_activities, str):
-                    detection_activities = [detection_activities]
-                elif not isinstance(detection_activities, list):
-                    detection_activities = []
-                
-                # Only capture if person has detected activities
-                if not detection_activities:
-                    continue  # Skip if no activities detected
-                
-                # Ensure coordinates are within frame bounds
-                x1 = max(0, min(x1, w))
-                y1 = max(0, min(y1, h))
-                x2 = max(0, min(x2, w))
-                y2 = max(0, min(y2, h))
-                
-                # Add a small margin around the person detection (5% of width/height)
-                margin_x = int((x2 - x1) * 0.05)
-                margin_y = int((y2 - y1) * 0.05)
-                
-                # Apply margin but keep within frame bounds
-                crop_x1 = max(0, x1 - margin_x)
-                crop_y1 = max(0, y1 - margin_y)
-                crop_x2 = min(w, x2 + margin_x)
-                crop_y2 = min(h, y2 + margin_y)
-                
-                # Crop the employee from the frame - this extracts just the person within the bounding box
-                employee_crop = current_frame[crop_y1:crop_y2, crop_x1:crop_x2].copy()
-                
-                # Debug info
-                print(f"Cropping person at coordinates: x1={crop_x1}, y1={crop_y1}, x2={crop_x2}, y2={crop_y2}")
-                
-                if employee_crop.size == 0:
-                    print(f"Warning: Empty crop detected for employee {i+1}")
+        with activity_logs_lock:
+            # Create log entries for each person with detected activities
+            for roi_idx, actions in person_actions.items():
+                if not actions:  # Skip if no actions detected
+                    continue
+                    
+                original_idx = roi_to_original_mapping.get(roi_idx)
+                if original_idx is None:
                     continue
                 
-                # Create timestamped folder if this is the first valid capture
-                if timestamp_folder is None:
-                    timestamp_folder = os.path.join(employee_act_dir, timestamp_str)
-                    if not os.path.exists(timestamp_folder):
-                        os.makedirs(timestamp_folder)
+                # Generate employee ID based on detection order
+                employee_id = f"EMP_{roi_idx + 1:03d}"
                 
-                # Generate employee ID and filename
-                employee_id = f"EMP_{i+1:03d}"
-                filename = f"employee_{employee_id}_{timestamp_str}.jpg"
-                filepath = os.path.join(timestamp_folder, filename)
+                # Extract action names - we'll need to access this through a global or pass it as parameter
+                action_names = []
+                for action_idx, confidence in actions:
+                    # Use a global captions list or import from a shared module
+                    try:
+                        # Try to access captions through the global video_manager if available
+                        if 'video_manager' in globals() and hasattr(video_manager, 'model_manager'):
+                            captions = video_manager.model_manager.captions
+                        else:
+                            # Fallback: load captions from the JSON file
+                            with open(os.path.join(os.path.dirname(__file__), 'ava_classes.json'), 'r') as f:
+                                captions = json.load(f)
+                        
+                        if action_idx < len(captions):
+                            action_names.append(captions[action_idx])
+                    except Exception as e:
+                        action_names.append(f"Action_{action_idx}")
                 
-                # Save the cropped image
-                cv2.imwrite(filepath, employee_crop)
+                if action_names:  # Only log if there are valid action names
+                    log_entry = {
+                        "timestamp": timestamp.isoformat(),
+                        "employee_id": employee_id,
+                        "actions": action_names,
+                        "confidence_scores": [conf for _, conf in actions]
+                    }
+                    
+                    activity_logs.append(log_entry)
+            
+            # Keep only the last 100 log entries
+            if len(activity_logs) > 100:
+                activity_logs[:] = activity_logs[-100:]
                 
-                # Determine quadrant for ROI info
-                quadrant = 2 if cy < center_y else 3
-                roi_info = f"ROI Quadrant {quadrant}"
-                
-                # Create capture record
-                capture_data = {
-                    "employee_id": employee_id,
-                    "timestamp": timestamp.isoformat(),
-                    "image_path": f"{timestamp_str}/{filename}",  # Use forward slash for web URLs
-                    "activities": detection_activities,
-                    "confidence": confidence,
-                    "bounding_box": [x1, y1, x2, y2],
-                    "roi_info": roi_info
-                }
-                
-                captured_employees.append(capture_data)
-                employee_captures.append(capture_data)
-                
-            except Exception as e:
-                print(f"Error processing detection {i}: {e}")
-                continue
-        
-        # Keep only recent captures (last 100)
-        if len(employee_captures) > 100:
-            employee_captures[:] = employee_captures[-100:]
-        
-        return {
-            "success": True,
-            "employees_detected": len(captured_employees),
-            "timestamp": timestamp.isoformat(),
-            "captures": captured_employees
-        }
-        
     except Exception as e:
-        print(f"Error in capture_employee_activity: {e}")
-        return {"success": False, "error": str(e)}
+        print(f"Error logging activity detection: {e}")
 
-def get_employee_captures():
-    """Get list of employee captures with statistics"""
+def get_recent_activity_logs(client_id=None):
+    """Get activity logs for a specific client, returning only new logs since last request"""
     try:
-        # Sort captures by timestamp (newest first)
-        sorted_captures = sorted(employee_captures, key=lambda x: x['timestamp'], reverse=True)
-        
-        # Calculate statistics
-        total_captures = len(employee_captures)
-        unique_employees = len(set(capture['employee_id'] for capture in employee_captures))
-        
-        statistics = {
-            "total_captures": total_captures,
-            "total_employees": unique_employees
-        }
-        
-        return {
-            "success": True,
-            "captures": sorted_captures[:50],  # Return latest 50 captures
-            "statistics": statistics
-        }
-        
+        with activity_logs_lock:
+            if not client_id:
+                # Return all logs if no client ID provided (for compatibility)
+                return activity_logs[-50:] if len(activity_logs) > 50 else activity_logs[:]
+            
+            with client_sessions_lock:
+                # Get the last index this client received
+                last_index = client_last_log_index.get(client_id, 0)
+                
+                # Get new logs since last request
+                if last_index < len(activity_logs):
+                    new_logs = activity_logs[last_index:]
+                    # Update client's last index
+                    client_last_log_index[client_id] = len(activity_logs)
+                    return new_logs
+                else:
+                    # No new logs
+                    return []
+                    
     except Exception as e:
-        print(f"Error in get_employee_captures: {e}")
-        return {"success": False, "error": str(e)}
+        print(f"Error getting recent activity logs: {e}")
+        return []
 
-def clear_employee_captures():
-    """Clear all employee captures and delete associated files"""
+def get_all_activity_logs():
+    """Get all activity logs (for initial page load)"""
     try:
-        global employee_captures
-        
-        # Delete all files in employee_act directory
-        if os.path.exists(employee_act_dir):
-            import shutil
-            shutil.rmtree(employee_act_dir)
-            os.makedirs(employee_act_dir)
-        
-        # Clear the captures list
-        employee_captures.clear()
-        
-        return {"success": True, "message": "All employee captures cleared"}
-        
+        with activity_logs_lock:
+            # Return last 50 logs for initial load
+            return activity_logs[-50:] if len(activity_logs) > 50 else activity_logs[:]
     except Exception as e:
-        print(f"Error in clear_employee_captures: {e}")
-        return {"success": False, "error": str(e)}
+        print(f"Error getting all activity logs: {e}")
+        return []
+
+def clear_activity_logs():
+    """Clear all activity logs"""
+    try:
+        with activity_logs_lock:
+            activity_logs.clear()
+        with client_sessions_lock:
+            client_last_log_index.clear()
+        return True
+    except Exception as e:
+        print(f"Error clearing activity logs: {e}")
+        return False
+
+def log_activity_detection_simple(detections_dict):
+    """Simple function to log activity detections for testing"""
+    try:
+        if not detections_dict:
+            return
+        
+        timestamp = datetime.datetime.now()
+        
+        with activity_logs_lock:
+            for employee_id, actions in detections_dict.items():
+                if actions:  # Only log if there are actions
+                    log_entry = {
+                        "timestamp": timestamp.isoformat(),
+                        "employee_id": employee_id,
+                        "actions": actions,
+                        "confidence_scores": [0.8] * len(actions)  # Dummy confidence scores
+                    }
+                    
+                    activity_logs.append(log_entry)
+                    print(f"Added test activity log: {employee_id} - {actions}")
+            
+            # Keep only the last 100 log entries
+            if len(activity_logs) > 100:
+                activity_logs[:] = activity_logs[-100:]
+                
+    except Exception as e:
+        print(f"Error logging simple activity detection: {e}")
 
 # ----------------------
 # Main Application
@@ -976,3 +983,147 @@ def stop_dual_recording():
     stop_recording('original')
     stop_recording('segmented')
     return True
+
+# ----------------------
+# Employee Activity Monitoring Functions
+# ----------------------
+
+def capture_employee_activity():
+    """Capture current frame and detected employees for activity monitoring"""
+    try:
+        # Get current frame and detections from video manager
+        if not hasattr(video_manager, 'current_frame') or video_manager.current_frame is None:
+            return {"success": False, "error": "No current frame available"}
+            
+        frame = video_manager.current_frame.copy()
+        
+        # Get current detections and activities
+        detections = getattr(video_manager, 'current_detections', [])
+        activities = getattr(video_manager, 'current_activities', {})
+        
+        if not detections:
+            return {"success": False, "error": "No employees detected in current frame"}
+        
+        captures = []
+        timestamp = datetime.datetime.now()
+        
+        for i, detection in enumerate(detections):
+            # detection format: [x1, y1, x2, y2, confidence]
+            x1, y1, x2, y2, conf = detection
+            
+            # Check if person is in ROI
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            
+            if is_on_active_side((cx, cy), config.roi_line_p1, config.roi_line_p2):
+                # Crop employee image
+                employee_crop = frame[int(y1):int(y2), int(x1):int(x2)]
+                
+                if employee_crop.size > 0:
+                    # Generate employee ID
+                    employee_id = f"EMP_{i+1:03d}"
+                    
+                    # Create timestamped folder
+                    timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
+                    capture_dir = os.path.join(employee_act_dir, timestamp_str)
+                    os.makedirs(capture_dir, exist_ok=True)
+                    
+                    # Save image
+                    filename = f"employee_{employee_id}_{timestamp_str}.jpg"
+                    filepath = os.path.join(capture_dir, filename)
+                    cv2.imwrite(filepath, employee_crop)
+                    
+                    # Get activities for this employee
+                    employee_activities = activities.get(i, [])
+                    
+                    # Store capture info
+                    capture_info = {
+                        "employee_id": employee_id,
+                        "timestamp": timestamp.isoformat(),
+                        "image_path": os.path.join(timestamp_str, filename),
+                        "activities": employee_activities,
+                        "roi_info": f"({cx}, {cy})",
+                        "confidence": conf
+                    }
+                    
+                    captures.append(capture_info)
+                    employee_captures.append(capture_info)
+        
+        # Keep only last 50 captures
+        if len(employee_captures) > 50:
+            employee_captures[:] = employee_captures[-50:]
+        
+        result = {
+            "success": True,
+            "captures_count": len(captures),
+            "captures": captures,
+            "timestamp": timestamp.isoformat()
+        }
+        
+        return result
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def get_employee_captures():
+    """Get list of employee captures with statistics"""
+    try:
+        # Calculate statistics
+        unique_employees = set()
+        for capture in employee_captures:
+            unique_employees.add(capture["employee_id"])
+        
+        statistics = {
+            "total_employees": len(unique_employees),
+            "total_captures": len(employee_captures),
+            "last_capture": employee_captures[-1]["timestamp"] if employee_captures else None
+        }
+        
+        return {
+            "success": True,
+            "captures": employee_captures,
+            "statistics": statistics
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e), "captures": [], "statistics": {}}
+
+def clear_employee_captures():
+    """Clear all employee captures and images"""
+    try:
+        # Clear in-memory captures
+        employee_captures.clear()
+        
+        # Optionally clear image files (commented out for safety)
+        # import shutil
+        # if os.path.exists(employee_act_dir):
+        #     for item in os.listdir(employee_act_dir):
+        #         item_path = os.path.join(employee_act_dir, item)
+        #         if os.path.isdir(item_path):
+        #             shutil.rmtree(item_path)
+        
+        return {"success": True, "message": "Employee captures cleared"}
+        
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def get_active_employees_count():
+    """Get count of currently active employees"""
+    try:
+        # Get current detections
+        detections = getattr(video_manager, 'current_detections', [])
+        active_count = 0
+        
+        for detection in detections:
+            x1, y1, x2, y2, conf = detection
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            
+            # Count only employees in ROI
+            if is_on_active_side((cx, cy), config.roi_line_p1, config.roi_line_p2):
+                active_count += 1
+        
+        return {"active_employees": active_count}
+        
+    except Exception as e:
+        return {"active_employees": 0}

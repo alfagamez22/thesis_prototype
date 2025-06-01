@@ -34,6 +34,7 @@
         <table id="employeesTable">
             <thead>
                 <tr>
+                    <th>Picture</th>
                     <th>ID</th>
                     <th>Employee ID</th>
                     <th>Full Name</th>
@@ -98,6 +99,25 @@
                         <option value="Inactive">Inactive</option>
                     </select>
                 </div>
+                <div class="form-group">
+                    <label>Employee Photo</label>
+                    <div class="photo-upload-section">
+                        <div class="photo-option">
+                            <label for="photoUrl">Photo URL</label>
+                            <input type="url" id="photoUrl" name="photoUrl" placeholder="https://example.com/photo.jpg">
+                        </div>
+                        <div class="photo-option-divider">OR</div>
+                        <div class="photo-option">
+                            <label for="photoFile">Upload Photo</label>
+                            <input type="file" id="photoFile" name="photoFile" accept="image/*">
+                            <small class="file-info">Supported formats: JPG, PNG, GIF (Max 5MB)</small>
+                        </div>
+                        <div class="photo-preview" id="photoPreview" style="display: none;">
+                            <img id="previewImage" src="" alt="Photo Preview">
+                            <button type="button" class="remove-photo" onclick="removePhotoPreview()">Remove</button>
+                        </div>
+                    </div>
+                </div>
   
                 <div class="form-actions">
                     <button type="submit" class="action-button">Save</button>
@@ -124,6 +144,73 @@
 let employees = [];
 let currentEmployeeId = null;
 
+// Photo upload and preview functions
+function setupPhotoUpload() {
+    const photoFile = document.getElementById('photoFile');
+    const photoUrl = document.getElementById('photoUrl');
+    
+    // Handle file selection
+    photoFile.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            // Clear URL input when file is selected
+            photoUrl.value = '';
+            
+            // Validate file size (5MB limit)
+            if (file.size > 5 * 1024 * 1024) {
+                alert('File size must be less than 5MB');
+                photoFile.value = '';
+                return;
+            }
+            
+            // Validate file type
+            if (!file.type.startsWith('image/')) {
+                alert('Please select an image file');
+                photoFile.value = '';
+                return;
+            }
+            
+            // Show preview
+            showPhotoPreview(file);
+        }
+    });
+    
+    // Handle URL input
+    photoUrl.addEventListener('input', function() {
+        if (photoUrl.value) {
+            // Clear file input when URL is entered
+            photoFile.value = '';
+            hidePhotoPreview();
+        }
+    });
+}
+
+function showPhotoPreview(file) {
+    const preview = document.getElementById('photoPreview');
+    const previewImage = document.getElementById('previewImage');
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        previewImage.src = e.target.result;
+        preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+}
+
+function hidePhotoPreview() {
+    const preview = document.getElementById('photoPreview');
+    preview.style.display = 'none';
+}
+
+function removePhotoPreview() {
+    const photoFile = document.getElementById('photoFile');
+    const photoUrl = document.getElementById('photoUrl');
+    
+    photoFile.value = '';
+    photoUrl.value = '';
+    hidePhotoPreview();
+}
+
 // Fetch all employees
 async function fetchEmployees() {
     try {
@@ -143,7 +230,18 @@ function renderEmployees(employeesToRender) {
     
     employeesToRender.forEach(emp => {
         const tr = document.createElement('tr');
+        
+        // Handle employee picture with fallback
+        const photoUrl = emp.photoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(emp.fullName || 'Employee')}&background=007bff&color=fff&size=64`;
+        
         tr.innerHTML = `
+            <td>
+                <img src="${photoUrl}" 
+                     alt="${emp.fullName}" 
+                     class="employee-photo"
+                     onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(emp.fullName || 'Employee')}&background=6c757d&color=fff&size=64'"
+                />
+            </td>
             <td>${emp.id}</td>
             <td>${emp.employeeId}</td>
             <td>${emp.fullName}</td>
@@ -183,6 +281,8 @@ function openAddModal() {
     document.getElementById('modalTitle').textContent = 'Add Employee';
     document.getElementById('employeeForm').reset();
     document.getElementById('employeeId').value = '';
+    removePhotoPreview();
+    setupPhotoUpload();
     document.getElementById('employeeModal').style.display = 'block';
 }
 
@@ -203,33 +303,58 @@ function openEditModal(employee) {
 
 function closeModal() {
     document.getElementById('employeeModal').style.display = 'none';
+    removePhotoPreview();
 }
 
 // Form submission
 async function handleSubmit(event) {
     event.preventDefault();
-    const formData = new FormData(event.target);
-    const employeeData = Object.fromEntries(formData.entries());
     
     try {
         const id = document.getElementById('employeeId').value;
         const method = id ? 'PUT' : 'POST';
         const url = id ? `/api/employees/${id}` : '/api/employees';
         
-        const response = await fetch(url, {
-            method: method,
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(employeeData)
-        });
+        // Check if we have a file upload
+        const photoFile = document.getElementById('photoFile').files[0];
+        
+        if (photoFile) {
+            // Use FormData for file upload
+            const formData = new FormData(event.target);
+            
+            const response = await fetch(url, {
+                method: method,
+                body: formData
+            });
 
-        if (response.ok) {
-            closeModal();
-            fetchEmployees();
+            if (response.ok) {
+                closeModal();
+                fetchEmployees();
+                removePhotoPreview(); // Clear preview after successful save
+            } else {
+                const error = await response.json();
+                alert(error.error || 'Failed to save employee');
+            }
         } else {
-            const error = await response.json();
-            alert(error.error || 'Failed to save employee');
+            // Use JSON for regular form data
+            const formData = new FormData(event.target);
+            const employeeData = Object.fromEntries(formData.entries());
+            
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(employeeData)
+            });
+
+            if (response.ok) {
+                closeModal();
+                fetchEmployees();
+            } else {
+                const error = await response.json();
+                alert(error.error || 'Failed to save employee');
+            }
         }
     } catch (error) {
         console.error('Error saving employee:', error);
@@ -272,16 +397,30 @@ async function confirmDelete() {
 // Edit function
 async function editEmployee(id) {
     try {
+        console.log('Fetching employee with ID:', id);
         const response = await fetch(`/api/employees/${id}`);
+        console.log('Response status:', response.status);
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Error response:', errorText);
+            alert(`Failed to load employee details: ${response.status} - ${errorText}`);
+            return;
+        }
+        
         const employee = await response.json();
+        console.log('Employee data:', employee);
         openEditModal(employee);
     } catch (error) {
         console.error('Error fetching employee:', error);
-        alert('Failed to load employee details');
+        alert('Failed to load employee details: ' + error.message);
     }
 }
 
 // Initialize
-document.addEventListener('DOMContentLoaded', fetchEmployees);
+document.addEventListener('DOMContentLoaded', function() {
+    setupPhotoUpload();
+    fetchEmployees();
+});
 </script>
 {% endblock %}
