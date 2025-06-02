@@ -16,6 +16,8 @@ import traceback
 from typing import List, Dict, Tuple, Optional
 from PIL import Image
 from torchvision.transforms import v2
+import av  # PyAV for robust RTSP streaming
+import queue
 
 # ----------------------
 # Configuration
@@ -42,7 +44,8 @@ class Config:
         parser.add_argument("-det_freq", type=int, default=6, help="detection frequency (every N frames)")
     #    parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
         # parser.add_argument("-F", type=str, default="<REPLACE> rtsp://username:password@tunnelip:8554/stream2?tcp <REPLACE>", help="file path for video input") #rtsp://username:password@tunnelip:8554/stream2?tcp
-        
+     #   parser.add_argument("-F", type=str, default="rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/my_camera?tcp", help="file path for video input") #for rtsp stream 192.168.68.128:554 #rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/stream2?tcp
+        parser.add_argument("-F", type=str, default="rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/my_camera?tcp", help="file path for video input") #for rtsp stream 192.168.68.128:554 #rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/stream2?tcp
         parser.add_argument("-roi", type=str, default=None, help="Path to ROI coordinates JSON")
         # Optimize: Only parse args if run as main, otherwise use defaults (empty list)
         self.args = parser.parse_args([])
@@ -111,7 +114,7 @@ class ModelManager:
         self.postprocess = PostProcessActions()
         
         # Toggle states
-        self.activity_recognition_on = True
+        self.activity_recognition_on = False
 
     def setup_detector(self):
         """Initialize the RT-DETR person detector"""
@@ -298,6 +301,9 @@ class VideoManager:
         if self.config.args.REC:
             self.setup_recording()
             
+        self.frame_queue = queue.Queue(maxsize=30)  # For decoupled RTSP reading
+        self.rtsp_reader_thread = None
+
     def setup_recording(self, recording_type="original"):
         """Setup video recording for either original or segmented recording"""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d __ %I-%M-%S_%p")
@@ -661,37 +667,82 @@ class VideoManager:
             t.start()
             self.video_thread_started = True
         
+    def _start_rtsp_reader_thread(self, video_source):
+        """Start a dedicated thread to read RTSP frames as fast as possible and put them in a queue (leaky buffer)."""
+        def rtsp_reader():
+            try:
+                container = av.open(video_source, options={'rtsp_transport': 'tcp', 'max_delay': '5000000'})
+                stream = container.streams.video[0]
+                stream.thread_type = 'AUTO'
+                for packet in container.demux(stream):
+                    for frame in packet.decode():
+                        img = frame.to_ndarray(format='bgr24')
+                        while True:
+                            try:
+                                self.frame_queue.put_nowait(img)
+                                break
+                            except queue.Full:
+                                # Leak downstream: remove oldest frame to make space for the newest
+                                try:
+                                    self.frame_queue.get_nowait()
+                                except queue.Empty:
+                                    break
+            except Exception as e:
+                print(f"[RTSP Reader] Error: {e}")
+        if self.rtsp_reader_thread is None or not self.rtsp_reader_thread.is_alive():
+            self.frame_queue.queue.clear()
+            self.rtsp_reader_thread = threading.Thread(target=rtsp_reader, daemon=True)
+            self.rtsp_reader_thread.start()
+
     def _video_background_worker(self):
         """Worker function for background video processing with auto-reconnect on RTSP drop and connection speed status"""
-        import time
-        reconnect_interval = 0.01  # 10ms
+        reconnect_interval = 0.5  # 500ms
         video_source = self.config.args.F if self.config.args.F else 0
         last_status = None
+
         while True:
-            cap = cv2.VideoCapture(video_source)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 30)
-            connection_start = time.time()
-            if not cap.isOpened():
-                self.connection_status = {
-                    'connected': False,
-                    'speed': 0,
-                    'last_success': None,
-                    'error': 'Cannot open video source'
-                }
-                time.sleep(reconnect_interval)
-                continue
-            print(f"[LiveFeed] Video source opened: {video_source}")
+            use_pyav = isinstance(video_source, str) and video_source.startswith("rtsp://")
+            frame_generator = None
+
+            if use_pyav:
+                print("[LiveFeed] Using PyAV (threaded) for RTSP stream.")
+                self._start_rtsp_reader_thread(video_source)
+                def frame_gen():
+                    while True:
+                        try:
+                            frame = self.frame_queue.get(timeout=2)
+                            yield frame
+                        except queue.Empty:
+                            print("[LiveFeed] Frame queue empty, RTSP may be stalled. Reconnecting...")
+                            break
+                frame_generator = frame_gen()
+            else:
+                print("[LiveFeed] Using OpenCV for local/camera stream.")
+                cap = cv2.VideoCapture(video_source)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 30)
+                if not cap.isOpened():
+                    self.connection_status = {
+                        'connected': False,
+                        'speed': 0,
+                        'last_success': None,
+                        'error': 'Cannot open video source'
+                    }
+                    time.sleep(reconnect_interval)
+                    continue
+                frame_generator = (cap.read()[1] for _ in iter(int, 1))
+
             self.connection_status = {
                 'connected': True,
                 'speed': 0,
                 'last_success': time.time(),
                 'error': None
             }
+            print(f"[LiveFeed] Video source opened: {video_source}")
+
             try:
-                while True:
+                for frame in frame_generator:
                     frame_start_time = time.time()
-                    ret, frame = cap.read()
-                    if not ret or frame is None:
+                    if frame is None:
                         print("[LiveFeed] Frame read failed, will reconnect.")
                         self.connection_status = {
                             'connected': False,
@@ -700,15 +751,6 @@ class VideoManager:
                             'error': 'Frame read failed'
                         }
                         break
-                    # Calculate speed (fps)
-                    elapsed = time.time() - frame_start_time
-                    speed = 1.0 / elapsed if elapsed > 0 else 0
-                    self.connection_status = {
-                        'connected': True,
-                        'speed': speed,
-                        'last_success': time.time(),
-                        'error': None
-                    }
                     processed_frame = self.process_frame(frame)
                     if processed_frame is not None:
                         try:
@@ -733,7 +775,8 @@ class VideoManager:
                     'error': str(e)
                 }
             finally:
-                cap.release()
+                if not use_pyav:
+                    cap.release()
                 print("[LiveFeed] Video thread cleanup complete. Will attempt to reconnect if needed.")
             time.sleep(reconnect_interval)
 
@@ -780,6 +823,20 @@ class VideoManager:
         finally:
             cap.release()
             print("Frame generator cleanup complete.")
+    
+    def _pyav_frame_reader(self, video_source):
+        """Robust RTSP frame reader using PyAV (FFmpeg)"""
+        try:
+            container = av.open(video_source, options={'rtsp_transport': 'tcp', 'max_delay': '5000000'})
+            stream = container.streams.video[0]
+            stream.thread_type = 'AUTO'
+            for packet in container.demux(stream):
+                for frame in packet.decode():
+                    img = frame.to_ndarray(format='bgr24')
+                    yield img
+        except Exception as e:
+            print(f"[PyAV] Error reading RTSP stream: {e}")
+            return
 
 # ----------------------
 # Employee Activity Monitoring
@@ -848,9 +905,9 @@ def log_activity_detection(person_detections, person_actions, roi_to_original_ma
                     
                     activity_logs.append(log_entry)
             
-            # Keep only the last 100 log entries
-            if len(activity_logs) > 100:
-                activity_logs[:] = activity_logs[-100:]
+            # No longer truncate activity_logs, allow it to grow unbounded
+            # if len(activity_logs) > 100:
+            #     activity_logs[:] = activity_logs[-100:]
                 
     except Exception as e:
         print(f"Error logging activity detection: {e}")
@@ -861,7 +918,7 @@ def get_recent_activity_logs(client_id=None):
         with activity_logs_lock:
             if not client_id:
                 # Return all logs if no client ID provided (for compatibility)
-                return activity_logs[-50:] if len(activity_logs) > 50 else activity_logs[:]
+                return activity_logs[:]
             
             with client_sessions_lock:
                 # Get the last index this client received
@@ -885,8 +942,8 @@ def get_all_activity_logs():
     """Get all activity logs (for initial page load)"""
     try:
         with activity_logs_lock:
-            # Return last 50 logs for initial load
-            return activity_logs[-50:] if len(activity_logs) > 50 else activity_logs[:]
+            # Return all logs for initial load
+            return activity_logs[:]
     except Exception as e:
         print(f"Error getting all activity logs: {e}")
         return []
@@ -924,9 +981,9 @@ def log_activity_detection_simple(detections_dict):
                     activity_logs.append(log_entry)
                     print(f"Added test activity log: {employee_id} - {actions}")
             
-            # Keep only the last 100 log entries
-            if len(activity_logs) > 100:
-                activity_logs[:] = activity_logs[-100:]
+            # No longer truncate activity_logs, allow it to grow unbounded
+            # if len(activity_logs) > 100:
+            #     activity_logs[:] = activity_logs[-100:]
                 
     except Exception as e:
         print(f"Error logging simple activity detection: {e}")
@@ -1049,9 +1106,9 @@ def capture_employee_activity():
                     captures.append(capture_info)
                     employee_captures.append(capture_info)
         
-        # Keep only last 50 captures
-        if len(employee_captures) > 50:
-            employee_captures[:] = employee_captures[-50:]
+        # No longer truncate employee_captures, allow it to grow unbounded
+        # if len(employee_captures) > 50:
+        #     employee_captures[:] = employee_captures[-50:]
         
         result = {
             "success": True,
@@ -1118,12 +1175,9 @@ def get_active_employees_count():
             x1, y1, x2, y2, conf = detection
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
-            
             # Count only employees in ROI
             if is_on_active_side((cx, cy), config.roi_line_p1, config.roi_line_p2):
                 active_count += 1
-        
         return {"active_employees": active_count}
-        
     except Exception as e:
         return {"active_employees": 0}
