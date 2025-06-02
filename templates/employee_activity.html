@@ -280,23 +280,36 @@ document.addEventListener('DOMContentLoaded', function() {
         totalEmployees.textContent = stats.total_employees || 0;
         totalCaptures.textContent = stats.total_captures || 0;
         // activeEmployees is updated in real-time during capture
-    }
-
-    function clearCaptureHistory() {
-        if (!confirm('Are you sure you want to clear all employee capture history? This action cannot be undone.')) {
+    }    function clearCaptureHistory() {
+        let confirmMessage, endpoint, reloadFunction;
+        
+        if (currentView === 'recent') {
+            confirmMessage = 'Are you sure you want to clear all recent employee capture history? This action cannot be undone.';
+            endpoint = '/clear_employee_captures';
+            reloadFunction = loadEmployeeCaptures;
+        } else {
+            confirmMessage = 'Are you sure you want to clear ALL employee images from the storage directory? This action cannot be undone.';
+            endpoint = '/clear_all_employee_images';
+            reloadFunction = loadEmployeeActImages;
+        }
+        
+        if (!confirm(confirmMessage)) {
             return;
         }
-        fetch('/clear_employee_captures', {
+        
+        fetch(endpoint, {
             method: 'DELETE'
         })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                loadEmployeeCaptures();
-                // Reset statistics
-                totalEmployees.textContent = '0';
-                totalCaptures.textContent = '0';
-                activeEmployees.textContent = '0';
+                reloadFunction();
+                if (currentView === 'recent') {
+                    // Reset statistics for recent view
+                    totalEmployees.textContent = '0';
+                    totalCaptures.textContent = '0';
+                    activeEmployees.textContent = '0';
+                }
             } else {
                 alert('Error clearing capture history: ' + data.error);
             }
@@ -324,55 +337,88 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!document.hidden && monitoringActive) {
             loadEmployeeCaptures();
         }
-    });
-
-    // --- NEW: Load employee activity images ---
+    });    // --- NEW: Load employee activity images with metadata ---
     function loadEmployeeActImages() {
-        fetch('/employee_act_dir')
+        fetch('/list_all_employee_captures')
             .then(response => response.json())
             .then(data => {
-                if (data.entries && data.entries.length > 0) {
-                    // Only show image files (jpg, png, jpeg) and include subfolders
-                    const imageFiles = data.entries.filter(e => e.type === 'file' && /\.(jpg|jpeg|png)$/i.test(e.path));
-                    if (imageFiles.length === 0) {
-                        capturesList.innerHTML = `<div class="col-12 text-center"><div class="alert alert-info">No images found in employee_act.</div></div>`;
-                        return;
-                    }
+                if (data.success && data.captures && data.captures.length > 0) {
                     capturesList.innerHTML = '';
-                    imageFiles.forEach(file => {
+                    data.captures.forEach(capture => {
                         const col = document.createElement('div');
-                        col.className = 'col-md-4 mb-3';
+                        col.className = 'col-md-6 col-lg-4 mb-3';
                         col.innerHTML = `
                             <div class="card capture-card h-100">
-                                <div class="card-body p-2 d-flex flex-column align-items-center">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <small class="text-muted">
+                                        <i class="fas fa-clock me-1"></i>
+                                        ${new Date(capture.timestamp).toLocaleString()}
+                                    </small>
+                                    <span class="badge bg-primary">
+                                        Employee ${capture.employee_id}
+                                    </span>
+                                </div>
+                                <div class="card-body p-2">
                                     <div class="employee-image-container mb-2">
-                                        <img src="/employee_captures/${encodeURIComponent(file.path)}" class="employee-image" alt="Employee Activity Image">
+                                        <img src="/employee_captures/${encodeURIComponent(capture.image_path)}" 
+                                             class="employee-image" 
+                                             alt="Employee ${capture.employee_id}"
+                                             onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGVlMmU2Ii8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNHB4IiBmaWxsPSIjNmM3NTdkIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+SW1hZ2UgTm90IEZvdW5kPC90ZXh0Pjwvc3ZnPg=='">
                                     </div>
                                     <div class="employee-info">
-                                        <small class="text-muted">${file.path}</small>
+                                        <h6 class="mb-1">
+                                            <i class="fas fa-user me-1"></i>
+                                            Employee ${capture.employee_id}
+                                        </h6>
+                                        <div class="activity-tags">
+                                            ${capture.activities && capture.activities.length > 0 ? 
+                                                capture.activities.map((activity, idx) =>
+                                                    `<span class="badge bg-success me-1 mb-1">${activity}</span>${idx < capture.activities.length - 1 ? ',' : ''}`
+                                                ).join(' ') : 
+                                                '<span class="badge bg-secondary me-1 mb-1">No activities detected</span>'
+                                            }
+                                        </div>
+                                        <small class="text-muted">
+                                            <i class="fas fa-map-marker-alt me-1"></i>
+                                            ROI: ${capture.roi_info || 'Unknown'}
+                                        </small>
+                                        <br>
+                                        <small class="text-muted">
+                                            <i class="fas fa-percentage me-1"></i>
+                                            Confidence: ${capture.confidence ? (capture.confidence * 100).toFixed(1) + '%' : 'N/A'}
+                                        </small>
                                     </div>
                                 </div>
                             </div>`;
                         capturesList.appendChild(col);
                     });
+                    
+                    // Update statistics for all images view
+                    updateStatistics(data.statistics);
                 } else {
-                    capturesList.innerHTML = `<div class="col-12 text-center"><div class="alert alert-info">No images found in employee_act.</div></div>`;
+                    capturesList.innerHTML = `<div class="col-12 text-center"><div class="alert alert-info">No employee activity images found with metadata.</div></div>`;
                 }
             })
             .catch(error => {
-                capturesList.innerHTML = `<div class="col-12 text-center"><div class="alert alert-danger">Error loading images from employee_act.</div></div>`;
+                console.error('Error loading employee images with metadata:', error);
+                capturesList.innerHTML = `<div class="col-12 text-center"><div class="alert alert-danger">Error loading employee images with metadata.</div></div>`;
             });
-    }
-
-    function setView(view) {
+    }    function setView(view) {
         currentView = view;
+        const clearHistoryBtn = document.getElementById('clearHistory');
+        const cardHeader = document.querySelector('.card-header h5');
+        
         if (view === 'recent') {
             showRecentBtn.classList.add('active');
             showAllBtn.classList.remove('active');
+            clearHistoryBtn.innerHTML = '<i class="fas fa-trash me-1"></i>Clear History';
+            cardHeader.innerHTML = '<i class="fas fa-history me-2"></i>Recent Employee Activity Captures';
             loadEmployeeCaptures();
         } else {
             showRecentBtn.classList.remove('active');
             showAllBtn.classList.add('active');
+            clearHistoryBtn.innerHTML = '<i class="fas fa-trash me-1"></i>Clear All Images';
+            cardHeader.innerHTML = '<i class="fas fa-images me-2"></i>All Employee Activity Images';
             loadEmployeeActImages();
         }
     }
@@ -500,6 +546,29 @@ document.addEventListener('DOMContentLoaded', function() {
     background: #f8f9fa;
     border-bottom: 1px solid #dee2e6;
     padding: 0.5rem 1rem;
+}
+
+/* Toggle buttons styling */
+.btn-group .btn {
+    transition: all 0.2s ease;
+}
+
+.btn-group .btn.active {
+    background-color: #007bff;
+    border-color: #007bff;
+    color: white;
+}
+
+.btn-group .btn:not(.active) {
+    background-color: white;
+    border-color: #dee2e6;
+    color: #6c757d;
+}
+
+.btn-group .btn:hover:not(.active) {
+    background-color: #f8f9fa;
+    border-color: #dee2e6;
+    color: #495057;
 }
 </style>
 {% endblock %}

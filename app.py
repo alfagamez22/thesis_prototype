@@ -739,6 +739,28 @@ def get_employee_act_dir():
         'entries': entries
     })
 
+@app.route('/clear_all_employee_images', methods=['DELETE'])
+@login_required
+def clear_all_employee_images():
+    """Clear all images and directories from employee_act directory"""
+    try:
+        import shutil
+        employee_act_dir = os.path.join(os.path.dirname(__file__), 'backend', 'employee_act')
+        
+        if os.path.exists(employee_act_dir):
+            # Remove all contents of the directory but keep the directory itself
+            for item in os.listdir(employee_act_dir):
+                item_path = os.path.join(employee_act_dir, item)
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+                elif os.path.isfile(item_path) and item not in ['ignore.txt', '.gitkeep']:  # Keep ignore files
+                    os.remove(item_path)
+        
+        return jsonify({"success": True, "message": "All employee images and metadata cleared successfully"})
+        
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # --- SocketIO Setup ---
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -763,6 +785,16 @@ def handle_disconnect():
     with active_ws_sessions_lock:
         active_ws_sessions.discard(request.sid)
     broadcast_user_count()
+
+@app.route('/list_all_employee_captures')
+@login_required
+def list_all_employee_captures():
+    """Get all employee captures with metadata from stored files"""
+    try:
+        result = livefeed.get_all_employee_captures_with_metadata()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)

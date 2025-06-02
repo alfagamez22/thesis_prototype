@@ -785,8 +785,18 @@ class VideoManager:
             time.sleep(reconnect_interval)
 
     def get_connection_status(self):
-        """Return the current connection status and speed for UI display"""
-        return getattr(self, 'connection_status', {'connected': False, 'speed': 0, 'last_success': None, 'error': 'Not started'})
+        """Return the current connection status and latency (ms) for UI display"""
+        # Calculate latency in ms if possible
+        status = getattr(self, 'connection_status', {'connected': False, 'speed': 0, 'last_success': None, 'error': 'Not started'})
+        # If speed is FPS, convert to ms latency if possible
+        if status.get('connected') and status.get('speed', 0) > 0:
+            # Use FPS to estimate latency: latency (ms) = 1000 / FPS
+            status = status.copy()
+            status['latency_ms'] = round(1000.0 / status['speed'], 1)
+        else:
+            status = status.copy()
+            status['latency_ms'] = None
+        return status
             
     def get_latest_frame(self):
         """Get the latest processed frame"""
@@ -873,7 +883,7 @@ def log_activity_detection(person_detections, person_actions, roi_to_original_ma
             for roi_idx, actions in person_actions.items():
                 if not actions:  # Skip if no actions detected
                     continue
-                    
+                
                 original_idx = roi_to_original_mapping.get(roi_idx)
                 if original_idx is None:
                     continue
@@ -1088,8 +1098,7 @@ def capture_employee_activity():
                     timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
                     capture_dir = os.path.join(employee_act_dir, timestamp_str)
                     os.makedirs(capture_dir, exist_ok=True)
-                    
-                    # Save image
+                      # Save image
                     filename = f"employee_{employee_id}_{timestamp_str}.jpg"
                     filepath = os.path.join(capture_dir, filename)
                     cv2.imwrite(filepath, employee_crop)
@@ -1106,6 +1115,13 @@ def capture_employee_activity():
                         "roi_info": f"({cx}, {cy})",
                         "confidence": conf
                     }
+                    
+                    # Save metadata as JSON file alongside the image
+                    metadata_filename = f"employee_{employee_id}_{timestamp_str}.json"
+                    metadata_filepath = os.path.join(capture_dir, metadata_filename)
+                    import json
+                    with open(metadata_filepath, 'w') as f:
+                        json.dump(capture_info, f, indent=2)
                     
                     captures.append(capture_info)
                     employee_captures.append(capture_info)
@@ -1185,6 +1201,58 @@ def get_active_employees_count():
         return {"active_employees": active_count}
     except Exception as e:
         return {"active_employees": 0}
+
+def get_all_employee_captures_with_metadata():
+    """Get all employee captures with metadata from stored JSON files"""
+    try:
+        import json
+        import glob
+        all_captures = []
+        
+        # Walk through all subdirectories in employee_act_dir
+        for root, dirs, files in os.walk(employee_act_dir):
+            # Look for JSON metadata files
+            json_files = [f for f in files if f.endswith('.json')]
+            
+            for json_file in json_files:
+                json_path = os.path.join(root, json_file)
+                try:
+                    with open(json_path, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    # Verify corresponding image exists
+                    image_filename = json_file.replace('.json', '.jpg')
+                    image_path = os.path.join(root, image_filename)
+                    
+                    if os.path.exists(image_path):
+                        all_captures.append(metadata)
+                    
+                except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+                    print(f"Error reading metadata from {json_path}: {e}")
+                    continue
+        
+        # Sort by timestamp (newest first)
+        all_captures.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        # Calculate statistics
+        unique_employees = set()
+        for capture in all_captures:
+            unique_employees.add(capture.get("employee_id", "Unknown"))
+        
+        statistics = {
+            "total_employees": len(unique_employees),
+            "total_captures": len(all_captures),
+            "last_capture": all_captures[0]["timestamp"] if all_captures else None
+        }
+        
+        return {
+            "success": True,
+            "captures": all_captures,
+            "statistics": statistics
+        }
+        
+    except Exception as e:
+        return {"success": False, "error": str(e), "captures": [], "statistics": {}}
 
 # --- User Session Tracking for Connected User Count ---
 import threading

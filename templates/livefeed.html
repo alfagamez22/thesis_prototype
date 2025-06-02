@@ -121,8 +121,10 @@ function updateConnectionStatusUI(status) {
     }
     if (status.connected) {
         dot.style.background = '#28a745';
-        // Show connection latency in ms instead of fps
-        let latencyMs = status.speed > 0 ? (100000 / status.speed).toFixed(1) : 'N/A';
+        // Use backend-provided latency_ms if available
+        let latencyMs = (status.latency_ms !== undefined && status.latency_ms !== null)
+            ? status.latency_ms.toFixed(1)
+            : (status.speed > 0 ? (1000 / status.speed).toFixed(1) : 'N/A');
         text.textContent = `Connected (${latencyMs} ms)`;
     } else {
         dot.style.background = '#dc3545';
