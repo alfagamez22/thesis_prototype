@@ -42,10 +42,10 @@ class Config:
         parser.add_argument("-delay", type=int, default=30, help="frame delay amount")
         parser.add_argument("-fps", type=int, default=10, help="target frames per second")
         parser.add_argument("-det_freq", type=int, default=6, help="detection frequency (every N frames)")
-    #    parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
+        parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
         # parser.add_argument("-F", type=str, default="<REPLACE> rtsp://username:password@tunnelip:8554/stream2?tcp <REPLACE>", help="file path for video input") #rtsp://username:password@tunnelip:8554/stream2?tcp
      #   parser.add_argument("-F", type=str, default="rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/my_camera?tcp", help="file path for video input") #for rtsp stream 192.168.68.128:554 #rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/stream2?tcp
-        parser.add_argument("-F", type=str, default="rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/my_camera?tcp", help="file path for video input") #for rtsp stream 192.168.68.128:554 #rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/stream2?tcp
+    #    parser.add_argument("-F", type=str, default="rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/my_camera?tcp", help="file path for video input") #for rtsp stream 192.168.68.128:554 #rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/stream2?tcp
         parser.add_argument("-roi", type=str, default=None, help="Path to ROI coordinates JSON")
         # Optimize: Only parse args if run as main, otherwise use defaults (empty list)
         self.args = parser.parse_args([])
@@ -114,7 +114,7 @@ class ModelManager:
         self.postprocess = PostProcessActions()
         
         # Toggle states
-        self.activity_recognition_on = False
+        self.activity_recognition_on = True
 
     def setup_detector(self):
         """Initialize the RT-DETR person detector"""
@@ -316,7 +316,8 @@ class VideoManager:
         else:
             output_path = os.path.join(recordings_dir, f"Original Recording {timestamp}.mp4")
 
-        mp4_codecs = ['mp4v', 'X264', 'avc1']
+        # Chrome-compatible H.264 codecs (baseline profile first for best compatibility)
+        mp4_codecs = ['avc1', 'X264', 'H264', 'mp4v']
         success = False
         writer = None
 
@@ -427,8 +428,11 @@ class VideoManager:
             from app import set_postprocess_progress
 
             # Define a callback that updates progress in the Flask app
-            def progress_callback(recording_id, percent):
-                set_postprocess_progress(recording_id, int(percent * 100), status='Processing')
+            def progress_callback(recording_id, percent, frame_details=None):
+                status = 'Processing'
+                if frame_details:
+                    status = frame_details.get('current_status', 'Processing')
+                set_postprocess_progress(recording_id, int(percent * 100), status=status, frame_details=frame_details)
 
             # Run the auto annotation with progress reporting
             auto_annotate_video_with_models(
@@ -1181,3 +1185,31 @@ def get_active_employees_count():
         return {"active_employees": active_count}
     except Exception as e:
         return {"active_employees": 0}
+
+# --- User Session Tracking for Connected User Count ---
+import threading
+from flask import session, jsonify, request
+
+active_sessions = set()
+active_sessions_lock = threading.Lock()
+
+def add_active_session(session_id):
+    with active_sessions_lock:
+        active_sessions.add(session_id)
+
+def remove_active_session(session_id):
+    with active_sessions_lock:
+        active_sessions.discard(session_id)
+
+def get_active_sessions_count():
+    with active_sessions_lock:
+        return len(active_sessions)
+
+def is_session_active(session_id):
+    with active_sessions_lock:
+        return session_id in active_sessions
+
+# Flask API endpoint to get the number of connected users
+# (This should be registered in app.py, but logic is here for import)
+def connected_users_api():
+    return jsonify({"connected_users": get_active_sessions_count()})

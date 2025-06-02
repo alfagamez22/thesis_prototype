@@ -49,6 +49,33 @@ Recordings
 </div>
 
 <script>
+// Check browser codec compatibility on page load
+function checkCodecSupport() {
+    const video = document.createElement('video');
+    const codecSupport = {
+        'H.264 Baseline (avc1.42E01E)': video.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+        'H.264 Main (avc1.4D401E)': video.canPlayType('video/mp4; codecs="avc1.4D401E"'), 
+        'H.264 High (avc1.64001E)': video.canPlayType('video/mp4; codecs="avc1.64001E"'),
+        'Generic MP4': video.canPlayType('video/mp4'),
+        'AVI': video.canPlayType('video/x-msvideo')
+    };
+    
+    console.log('Browser codec support check:', codecSupport);
+    
+    // Check if any H.264 codecs are supported
+    const h264Support = Object.entries(codecSupport)
+        .filter(([codec, _]) => codec.includes('H.264'))
+        .some(([_, support]) => support !== '');
+    
+    if (!h264Support) {
+        console.warn('⚠️ Limited H.264 codec support detected. Video playback may have issues.');
+    } else {
+        console.log('✅ H.264 codec support detected. Video playback should work well.');
+    }
+    
+    return codecSupport;
+}
+
 function formatDate(timestamp) {
     const date = new Date(timestamp);
     return date.toLocaleString();
@@ -217,13 +244,30 @@ function createRecordingCard(file, type) {
                            onsuspend="console.log('Video suspended: ${file}')"
                            onabort="console.log('Video aborted: ${file}')"
                            onemptied="console.log('Video emptied: ${file}')">
-                        <source src="/recordings/${encodeURIComponent(file)}?t=${Date.now()}" type="video/mp4" 
-                                onerror="handleSourceError(this, '${file}')" />
-                        <source src="/recordings/${encodeURIComponent(file)}?t=${Date.now()}" type="video/x-msvideo" />
+                        <!-- H.264 baseline profile - most compatible with Chrome -->
+                        <source src="/recordings/${encodeURIComponent(file)}?t=${Date.now()}" 
+                                type='video/mp4; codecs="avc1.42E01E"' 
+                                onerror="handleSourceError(this, '${file}', 'H.264 Baseline')" />
+                        <!-- H.264 main profile - good compatibility -->
+                        <source src="/recordings/${encodeURIComponent(file)}?t=${Date.now()}" 
+                                type='video/mp4; codecs="avc1.4D401E"' 
+                                onerror="handleSourceError(this, '${file}', 'H.264 Main')" />
+                        <!-- H.264 high profile - highest quality -->
+                        <source src="/recordings/${encodeURIComponent(file)}?t=${Date.now()}" 
+                                type='video/mp4; codecs="avc1.64001E"' 
+                                onerror="handleSourceError(this, '${file}', 'H.264 High')" />
+                        <!-- Generic MP4 fallback -->
+                        <source src="/recordings/${encodeURIComponent(file)}?t=${Date.now()}" 
+                                type="video/mp4" 
+                                onerror="handleSourceError(this, '${file}', 'Generic MP4')" />
+                        <!-- Legacy AVI fallback -->
+                        <source src="/recordings/${encodeURIComponent(file)}?t=${Date.now()}" 
+                                type="video/x-msvideo" 
+                                onerror="handleSourceError(this, '${file}', 'AVI')" />
                         <p class="text-danger p-3">
                             <i class="fas fa-exclamation-triangle me-2"></i>
-                            Your browser does not support video playback or the video format is not supported.
-                            <br><small>Try downloading the video to play it with an external player.</small>
+                            Your browser does not support video playback or the video format is not compatible.
+                            <br><small>This may be due to codec compatibility issues with Chrome. Try downloading the video to play it with an external player.</small>
                         </p>
                     </video>
                     <div class="video-error-info" style="display: none;">
@@ -285,7 +329,7 @@ function createProcessingCard(file) {
                         <p class="small text-muted mb-3">
                             Applying person detection and segmentation...
                         </p>
-                        <!-- Real Progress Bar -->
+                        <!-- Enhanced Real Progress Bar with Frame Details -->
                         <div class="progress-container">
                             <div class="d-flex justify-content-between mb-2">
                                 <small class="text-muted">Progress</small>
@@ -304,6 +348,40 @@ function createProcessingCard(file) {
                                 <i class="fas fa-play-circle me-1"></i>
                                 Initializing processing...
                             </small>
+                            
+                            <!-- Frame-by-frame processing details -->
+                            <div class="frame-details mt-3" style="display: none;">
+                                <div class="row g-2">
+                                    <div class="col-6">
+                                        <div class="detail-item">
+                                            <i class="fas fa-film text-primary me-1"></i>
+                                            <span class="detail-label">Frame:</span>
+                                            <span class="frame-count">0/0</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="detail-item">
+                                            <i class="fas fa-users text-success me-1"></i>
+                                            <span class="detail-label">Detected:</span>
+                                            <span class="persons-detected">0</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="detail-item">
+                                            <i class="fas fa-clock text-info me-1"></i>
+                                            <span class="detail-label">Speed:</span>
+                                            <span class="processing-speed">0.0s/frame</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="detail-item">
+                                            <i class="fas fa-cut text-warning me-1"></i>
+                                            <span class="detail-label">SAM:</span>
+                                            <span class="sam-time">0.0s</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -324,37 +402,102 @@ function createProcessingCard(file) {
 function startRealProgressPolling(cardId, file) {
     const card = document.getElementById(cardId);
     if (!card) return;
+    
+    // Get all progress elements
     const progressBar = card.querySelector('.progress-bar');
     const progressPercentage = card.querySelector('.processing-percentage');
     const progressStatus = card.querySelector('.processing-status');
+    const frameDetails = card.querySelector('.frame-details');
+    const frameCount = card.querySelector('.frame-count');
+    const personsDetected = card.querySelector('.persons-detected');
+    const processingSpeed = card.querySelector('.processing-speed');
+    const samTime = card.querySelector('.sam-time');
+    
     let lastPercent = 0;
     let interval = setInterval(() => {
         fetch(`/api/postprocess_progress/${encodeURIComponent(file)}`)
             .then(r => r.json())
             .then(data => {
+                console.log('Progress data received:', data); // Debug log
+                
                 let percent = data.percent || 0;
                 let status = data.status || '';
+                let frameDetailsData = data.frame_details || {};
+                
+                console.log('Frame details:', frameDetailsData); // Debug log
+                
+                // Update main progress bar
                 progressBar.style.width = `${percent}%`;
                 progressBar.setAttribute('aria-valuenow', percent);
                 progressPercentage.textContent = `${percent}%`;
                 progressStatus.innerHTML = `<i class="fas fa-cog me-1"></i>${status}`;
+                
+                // Show and update frame details if available
+                if (frameDetailsData && Object.keys(frameDetailsData).length > 0) {
+                    console.log('Showing frame details'); // Debug log
+                    frameDetails.style.display = 'block';
+                    frameDetails.classList.add('active');
+                    
+                    // Helper function to update value with animation
+                    function updateValueWithAnimation(element, newValue) {
+                        if (element && element.textContent !== newValue) {
+                            element.classList.add('updating');
+                            element.textContent = newValue;
+                            setTimeout(() => element.classList.remove('updating'), 500);
+                        }
+                    }
+                    
+                    // Update frame count
+                    if (frameDetailsData.frame_number !== undefined && frameDetailsData.total_frames !== undefined) {
+                        updateValueWithAnimation(frameCount, `${frameDetailsData.frame_number}/${frameDetailsData.total_frames}`);
+                    }
+                    
+                    // Update persons detected
+                    if (frameDetailsData.persons_detected !== undefined) {
+                        updateValueWithAnimation(personsDetected, frameDetailsData.persons_detected.toString());
+                    }
+                    
+                    // Update processing speed
+                    if (frameDetailsData.processing_speed !== undefined) {
+                        updateValueWithAnimation(processingSpeed, `${frameDetailsData.processing_speed.toFixed(2)}s/frame`);
+                    }
+                    
+                    // Update SAM inference time
+                    if (frameDetailsData.sam_inference_time !== undefined) {
+                        updateValueWithAnimation(samTime, `${frameDetailsData.sam_inference_time.toFixed(2)}s`);
+                    }
+                } else {
+                    console.log('No frame details available or empty'); // Debug log
+                    // Hide frame details if no data available
+                    frameDetails.style.display = 'none';
+                    frameDetails.classList.remove('active');
+                }
+                
                 lastPercent = percent;
+                
+                // Check for completion
                 if (percent >= 100 || status.toLowerCase().includes('complete') || status.toLowerCase().includes('failed') || status.toLowerCase().includes('error')) {
                     clearInterval(interval);
                     progressBar.classList.remove('progress-bar-animated');
                     progressBar.classList.remove('bg-warning');
+                    
                     if (status.toLowerCase().includes('complete')) {
                         progressBar.classList.add('bg-success');
                         progressStatus.innerHTML = `<i class='fas fa-check-circle me-1'></i>Complete`;
+                        // Keep frame details visible for completed processing
                     } else if (status.toLowerCase().includes('failed') || status.toLowerCase().includes('error')) {
                         progressBar.classList.add('bg-danger');
                         progressStatus.innerHTML = `<i class='fas fa-times-circle me-1'></i>${status}`;
+                        // Hide frame details on error
+                        frameDetails.style.display = 'none';
                     }
+                    
                     // Optionally, reload the recordings list after a short delay
                     setTimeout(() => { loadRecordingsWithAutoRefresh(); }, 100000);
                 }
             })
-            .catch(() => {
+            .catch((error) => {
+                console.warn('Progress polling error:', error);
                 // If error, keep showing last known progress
             });
     }, 1500);
@@ -387,6 +530,17 @@ function handleVideoError(videoElement, filename) {
     console.log('Video videoWidth:', videoElement.videoWidth);
     console.log('Video videoHeight:', videoElement.videoHeight);
     
+    // Check codec support
+    const codecSupport = {
+        'H.264 Baseline': videoElement.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+        'H.264 Main': videoElement.canPlayType('video/mp4; codecs="avc1.4D401E"'),
+        'H.264 High': videoElement.canPlayType('video/mp4; codecs="avc1.64001E"'),
+        'Generic MP4': videoElement.canPlayType('video/mp4'),
+        'AVI': videoElement.canPlayType('video/x-msvideo')
+    };
+    
+    console.log('Browser codec support:', codecSupport);
+    
     // Test if the URL is accessible
     fetch(videoElement.currentSrc)
         .then(response => {
@@ -407,6 +561,8 @@ function handleVideoError(videoElement, filename) {
     const details = videoElement.parentElement.querySelector('.video-details');
     
     let errorMessage = 'Unknown error';
+    let isCodecIssue = false;
+    
     if (videoElement.error) {
         switch(videoElement.error.code) {
             case 1:
@@ -416,10 +572,12 @@ function handleVideoError(videoElement, filename) {
                 errorMessage = 'Network error - cannot load video';
                 break;
             case 3:
-                errorMessage = 'Video decoding failed - codec not supported';
+                errorMessage = 'Video decoding failed - codec not supported by browser';
+                isCodecIssue = true;
                 break;
             case 4:
-                errorMessage = 'Video format not supported';
+                errorMessage = 'Video format not supported by browser';
+                isCodecIssue = true;
                 break;
         }
     }
@@ -427,19 +585,33 @@ function handleVideoError(videoElement, filename) {
     console.error(`Video error: ${errorMessage} for file: ${filename}`);
     
     if (details) {
-        details.textContent = `Error: ${errorMessage}`;
+        const supportedCodecs = Object.entries(codecSupport)
+            .filter(([_, support]) => support !== '')
+            .map(([codec, _]) => codec);
+        
+        details.textContent = `Error: ${errorMessage}. Supported codecs: ${supportedCodecs.join(', ') || 'None detected'}`;
         errorInfo.style.display = 'block';
     }
     
     // Replace video with error message and test link
     videoElement.style.display = 'none';
     const errorDiv = document.createElement('div');
-    errorDiv.className = 'alert alert-warning text-center p-3';
+    errorDiv.className = isCodecIssue ? 'alert alert-warning text-center p-3' : 'alert alert-danger text-center p-3';
+    
+    const codecHelp = isCodecIssue ? `
+        <div class="mt-2 small text-muted">
+            <strong>Codec Compatibility Issue:</strong><br>
+            Your browser may not support the video codec used in this recording.<br>
+            Chrome works best with H.264 baseline profile videos.
+        </div>
+    ` : '';
+    
     errorDiv.innerHTML = `
         <i class="fas fa-exclamation-triangle me-2"></i>
         <strong>Video Playback Error</strong><br>
         <small>${errorMessage}</small><br>
         <small class="text-muted">File: ${filename}</small><br>
+        ${codecHelp}
         <div class="mt-2">
             <a href="/recordings/${encodeURIComponent(filename)}" target="_blank" class="btn btn-sm btn-outline-primary me-2">
                 Open video in new tab
@@ -452,8 +624,9 @@ function handleVideoError(videoElement, filename) {
     videoElement.parentElement.appendChild(errorDiv);
 }
 
-function handleSourceError(sourceElement, filename) {
-    console.error('Source error for', filename, ':', sourceElement.error);
+function handleSourceError(sourceElement, filename, codecType = 'Unknown') {
+    console.error(`Source error for ${filename} (${codecType}):`, sourceElement.error);
+    console.log(`Failed codec type: ${codecType}, trying next source...`);
 }
 
 function handleVideoLoaded(videoElement, filename) {
@@ -494,9 +667,10 @@ function retryVideoLoad(filename, buttonElement) {
         // Reload the video with a new timestamp to avoid caching
         const timestamp = Date.now();
         const sources = video.querySelectorAll('source');
-        sources.forEach(source => {
+        sources.forEach((source, index) => {
             const originalSrc = source.src.split('?')[0]; // Remove existing timestamp
             source.src = `${originalSrc}?t=${timestamp}`;
+            console.log(`Updated source ${index + 1}:`, source.type, source.src);
         });
         
         // Reload the video
@@ -631,6 +805,10 @@ function loadRecordingsWithAutoRefresh() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Check codec compatibility on page load
+    checkCodecSupport();
+    
+    // Load recordings
     loadRecordingsWithAutoRefresh();
 });
 </script>
@@ -859,6 +1037,95 @@ document.addEventListener('DOMContentLoaded', function() {
     margin-right: 0.75rem;
 }
 
+/* Frame Details Styling */
+.frame-details {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 8px;
+    padding: 1rem;
+    border: 1px solid #dee2e6;
+    margin-top: 1rem;
+    transition: all 0.3s ease;
+}
+
+.frame-details.active {
+    background: linear-gradient(135deg, #e8f4fd 0%, #dbeafe 100%);
+    border-color: #3b82f6;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+}
+
+.detail-item {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    transition: background-color 0.2s ease;
+}
+
+.detail-item:hover {
+    background: rgba(255, 255, 255, 0.9);
+}
+
+.detail-item:last-child {
+    margin-bottom: 0;
+}
+
+.detail-label {
+    font-weight: 500;
+    margin-left: 0.5rem;
+    margin-right: 0.5rem;
+    color: #495057;
+    min-width: 70px;
+}
+
+.frame-count,
+.persons-detected,
+.processing-speed,
+.sam-time {
+    font-weight: 600;
+    color: #212529;
+    margin-left: auto;
+    font-family: 'Courier New', monospace;
+    background: rgba(255, 255, 255, 0.8);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid #e9ecef;
+}
+
+/* Icon colors for frame details */
+.detail-item .fa-film {
+    color: #6f42c1;
+}
+
+.detail-item .fa-users {
+    color: #28a745;
+}
+
+.detail-item .fa-clock {
+    color: #17a2b8;
+}
+
+.detail-item .fa-cut {
+    color: #fd7e14;
+}
+
+/* Animation for updating values */
+.frame-count.updating,
+.persons-detected.updating,
+.processing-speed.updating,
+.sam-time.updating {
+    background: #fff3cd;
+    border-color: #ffeaa7;
+    animation: pulse-yellow 0.5s ease-in-out;
+}
+
+@keyframes pulse-yellow {
+    0% { background: #fff3cd; }
+    50% { background: #fffadb; }
+    100% { background: rgba(255, 255, 255, 0.8); }
+}
+
 /* Responsive Design */
 .col-md-6 {
     width: 50%;
@@ -881,6 +1148,16 @@ document.addEventListener('DOMContentLoaded', function() {
     .button-group .btn {
         margin-right: 0 !important;
         margin-bottom: 0.75rem;
+    }
+    
+    .frame-details .row .col-6 {
+        width: 100%;
+        margin-bottom: 0.5rem;
+    }
+    
+    .detail-label {
+        min-width: 60px;
+        font-size: 0.9rem;
     }
 }
 </style>

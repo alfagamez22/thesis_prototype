@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 import torch
+import time
 from PIL import Image
 from transformers import RTDetrV2ForObjectDetection, RTDetrImageProcessor
 from ultralytics import SAM
@@ -69,10 +70,10 @@ def auto_annotate_video_with_models(
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Video properties: {frame_width}x{frame_height} @ {frame_rate} FPS")
     
-    # Create output video writer
+    # Create output video writer with Chrome-compatible H.264 codec
     out = cv2.VideoWriter(
         output_video_path, 
-        cv2.VideoWriter_fourcc(*'mp4v'), 
+        cv2.VideoWriter_fourcc(*'avc1'),  # H.264 baseline profile for Chrome compatibility
         frame_rate, 
         (frame_width, frame_height)
     )
@@ -103,6 +104,7 @@ def auto_annotate_video_with_models(
             break
         
         print(f"Processing frame {frame_idx} ...", end=' ')
+        frame_start_time = time.time()
         
         # Create a copy of the frame for visualization
         vis_frame = frame.copy()
@@ -133,13 +135,30 @@ def auto_annotate_video_with_models(
                 
         print(f"Detected {len(person_boxes)} person(s).", end=' ')
         
+        # Update progress with detailed frame information
+        if progress_callback is not None and recording_id is not None:
+            progress = (frame_idx + 1) / (int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) + 1)
+            frame_details = {
+                'frame_number': frame_idx,
+                'total_frames': int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+                'persons_detected': len(person_boxes),
+                'processing_time': time.time() - frame_start_time,
+                'detection_time': time.time() - frame_start_time,
+                'current_status': f"Processing frame {frame_idx + 1}/{int(cap.get(cv2.CAP_PROP_FRAME_COUNT))}: {len(person_boxes)} person(s) detected"
+            }
+            progress_callback(recording_id, progress, frame_details)
+        
         # Apply SAM for segmentation if enabled
+        sam_inference_time = 0
         if use_sam and sam_model is not None and len(person_boxes) > 0:
             try:
+                sam_start_time = time.time()
                 # Use autocast for fp16 if enabled
                 autocast_ctx = torch.cuda.amp.autocast if (use_fp16 and device.type == "cuda") else torch.cpu.amp.autocast
                 with torch.amp.autocast('cuda', enabled=use_fp16):
                     sam_results = sam_model.predict(source=rgb_frame, conf=conf, show=False, save=False)
+                sam_inference_time = time.time() - sam_start_time
+                print(f"SAM inference: {sam_inference_time:.3f}s.", end=' ')
                 
                 # Visualize segmentation masks
                 if visualize and len(sam_results) > 0:
@@ -225,13 +244,23 @@ def auto_annotate_video_with_models(
         
         # Write the visualized frame
         out.write(vis_frame)
-        print("Frame processed and written.")
+        frame_processing_time = time.time() - frame_start_time
+        print(f"Frame processed and written. Total time: {frame_processing_time:.3f}s")
         frame_idx += 1
         
-        # Update progress using the callback if provided
+        # Update progress with comprehensive frame information
         if progress_callback is not None and recording_id is not None:
             progress = (frame_idx + 1) / (int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) + 1)
-            progress_callback(recording_id, progress)
+            detailed_info = {
+                'frame_number': frame_idx,
+                'total_frames': int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+                'persons_detected': len(person_boxes),
+                'frame_processing_time': frame_processing_time,
+                'sam_inference_time': sam_inference_time if 'sam_inference_time' in locals() else 0,
+                'current_status': f"Frame {frame_idx + 1}/{int(cap.get(cv2.CAP_PROP_FRAME_COUNT))}: {len(person_boxes)} person(s) detected",
+                'processing_speed': frame_processing_time  # Send as number, not string
+            }
+            progress_callback(recording_id, progress, detailed_info)
     
     # Release resources
     cap.release()

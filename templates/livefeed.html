@@ -7,13 +7,20 @@ Live Feed
 {% block content %}
 <div class="container mt-4">
     <h2 class="text-center mb-4">Live Feed</h2>
+
+    <!-- Real-time Connected Users Indicator -->
+    <div class="row mb-2">
+        <div class="col-12 text-end">
+            <span id="connectedUsersIndicator" class="badge bg-info text-dark" style="font-size:1rem;">
+                <i class="fas fa-users"></i> Connected users: <span id="connectedUsersCount">1</span>
+            </span>
+        </div>
+    </div>
+
     <div class="row">
         <div class="col-md-8">
             <div class="video-container position-relative">
-                <!-- Safari-compatible video display -->
-                <canvas id="videoCanvas" style="display: none; width: 150%; height: auto;" alt="Live Feed"></canvas>
-                <!-- Chrome/Firefox multipart stream -->
-                <img id="videoImg" src="{{ url_for('video_feed') }}" width="150%" alt="Live Feed">
+                <img src="{{ url_for('video_feed') }}" width="150%" alt="Live Feed">
             </div>
         </div>
         <div class="col-md-4">
@@ -104,86 +111,6 @@ Live Feed
 </div>
 
 <script>
-// Safari compatibility fix for video feed
-function isSafari() {
-    return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-}
-
-function setupVideoFeed() {
-    const videoCanvas = document.getElementById('videoCanvas');
-    const videoImg = document.getElementById('videoImg');
-    
-    if (isSafari()) {
-        console.log('Safari detected - using canvas-based video feed');
-        
-        // Hide img element and show canvas for Safari
-        videoImg.style.display = 'none';
-        videoCanvas.style.display = 'block';
-        
-        const ctx = videoCanvas.getContext('2d');
-        let isLoading = false;
-        
-        function fetchAndDrawFrame() {
-            if (isLoading) return;
-            isLoading = true;
-            
-            fetch('/video_frame')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.blob();
-                })
-                .then(blob => {
-                    const img = new Image();
-                    img.onload = function() {
-                        // Set canvas size to match image
-                        videoCanvas.width = img.width;
-                        videoCanvas.height = img.height;
-                        
-                        // Clear and draw new frame
-                        ctx.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
-                        ctx.drawImage(img, 0, 0);
-                        
-                        URL.revokeObjectURL(img.src);
-                        isLoading = false;
-                        
-                        // Schedule next frame
-                        setTimeout(fetchAndDrawFrame, 100); // ~10 FPS for Safari
-                    };
-                    img.onerror = function() {
-                        console.error('Failed to load frame image');
-                        isLoading = false;
-                        setTimeout(fetchAndDrawFrame, 500); // Retry after delay
-                    };
-                    img.src = URL.createObjectURL(blob);
-                })
-                .catch(error => {
-                    console.error('Error fetching video frame:', error);
-                    isLoading = false;
-                    setTimeout(fetchAndDrawFrame, 1000); // Retry after longer delay
-                });
-        }
-        
-        // Start frame fetching for Safari
-        fetchAndDrawFrame();
-        
-    } else {
-        console.log('Non-Safari browser detected - using multipart stream');
-        // For Chrome/Firefox, keep the img element visible
-        videoImg.style.display = 'block';
-        videoCanvas.style.display = 'none';
-        
-        // Add error handling for img element
-        videoImg.onerror = function() {
-            console.error('Video feed connection lost, attempting to reconnect...');
-            setTimeout(() => {
-                videoImg.src = "{{ url_for('video_feed') }}?" + Date.now();
-            }, 1000);
-        };
-    }
-}
-
 function updateConnectionStatusUI(status) {
     const dot = document.getElementById('conn-status-dot');
     const text = document.getElementById('conn-status-text');
@@ -210,6 +137,26 @@ function pollConnectionStatus() {
         .then(updateConnectionStatusUI)
         .catch(() => updateConnectionStatusUI(null));
 }
+
+// --- Connected Users Polling ---
+function pollConnectedUsers() {
+    fetch('/api/connected_users')
+        .then(r => r.json())
+        .then(data => {
+            const count = data.connected_users || 1;
+            document.getElementById('connectedUsersCount').textContent = count;
+        })
+        .catch(() => {
+            document.getElementById('connectedUsersCount').textContent = '?';
+        });
+}
+
+setInterval(pollConnectionStatus, 1000);
+setInterval(pollConnectedUsers, 3000);
+document.addEventListener('DOMContentLoaded', function() {
+    pollConnectionStatus();
+    pollConnectedUsers();
+});
 
 // Activity Logs functionality
 let logsPaused = false;
@@ -405,12 +352,6 @@ function toggleLogsPause() {
     }
 }
 
-setInterval(pollConnectionStatus, 1000);
-document.addEventListener('DOMContentLoaded', function() {
-    pollConnectionStatus();
-    setupVideoFeed(); // Initialize Safari-compatible video feed
-});
-
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize logs elements
     logsContent = document.getElementById('logsContent');
@@ -521,6 +462,15 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+// --- WebSocket Real-Time Connected Users ---
+const socket = io();
+socket.on('user_count', function(data) {
+    document.getElementById('connectedUsersCount').textContent = data.connected_users;
+});
+</script>
+
 <style>
 /* Control Panel Styles */
 .controls {
@@ -574,6 +524,7 @@ document.addEventListener('DOMContentLoaded', function() {
     top: 2px;
     left: 2px;
     background: white;
+    border-radius: 50%;
     transition: 0.3s;
 }
 

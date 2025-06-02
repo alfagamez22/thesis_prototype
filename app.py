@@ -5,7 +5,7 @@ from datetime import datetime
 from werkzeug.utils import secure_filename
 import uuid
 sys.path.append(os.path.join(os.path.dirname(__file__), 'backend', 'har'))
-import backend.har.livefeed as livefeed
+from backend.har import livefeed
 from functools import wraps
 sys.path.append(os.path.join(os.path.dirname(__file__), 'backend'))
 import backend.models as models
@@ -14,6 +14,8 @@ from backend.config import Config
 from threading import Lock
 import threading
 import time
+# --- WebSocket (Socket.IO) Setup for Real-Time Connected User Count ---
+from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -43,16 +45,18 @@ postprocess_progress = {}
 postprocess_progress_lock = Lock()
 
 # Utility to update progress (to be called from post-processing logic)
-def set_postprocess_progress(recording_id, percent, status=None):
+def set_postprocess_progress(recording_id, percent, status=None, frame_details=None):
     with postprocess_progress_lock:
         postprocess_progress[recording_id] = {
             'percent': percent,
             'status': status or '',
+            'frame_details': frame_details or {}
         }
+        print(f"[DEBUG] Progress set for {recording_id}: {percent}% - {status} - Frame details: {frame_details}")  # Debug log
 
 def get_postprocess_progress(recording_id):
     with postprocess_progress_lock:
-        return postprocess_progress.get(recording_id, {'percent': 0, 'status': 'Queued'})
+        return postprocess_progress.get(recording_id, {'percent': 0, 'status': 'Queued', 'frame_details': {}})
 
 # @app.route('/postprocess_progress/<recording_id>')
 # def postprocess_progress_status(recording_id):
@@ -68,6 +72,21 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# --- Connected User Count API ---
+@app.route('/api/connected_users')
+def connected_users():
+    from backend.har import livefeed
+    return livefeed.connected_users_api()
+
+@app.before_request
+def track_active_session():
+    # Only track for logged-in users
+    if session.get('logged_in'):
+        if 'sid' not in session:
+            session['sid'] = str(uuid.uuid4())
+        from backend.har import livefeed
+        livefeed.add_active_session(session['sid'])
+
 @app.route("/login", methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -77,6 +96,10 @@ def login():
         # Replace this with your actual user authentication logic
         if username == "username" and password == "password":  # Example credentials
             session['logged_in'] = True
+            if 'sid' not in session:
+                session['sid'] = str(uuid.uuid4())
+            from backend.har import livefeed
+            livefeed.add_active_session(session['sid'])
             return redirect(url_for('home'))
         else:
             flash('Invalid username or password')
@@ -85,7 +108,11 @@ def login():
 
 @app.route("/logout")
 def logout():
+    if 'sid' in session:
+        from backend.har import livefeed
+        livefeed.remove_active_session(session['sid'])
     session.pop('logged_in', None)
+    session.pop('sid', None)
     return redirect(url_for('login'))
 
 @app.route("/")
@@ -167,53 +194,32 @@ def video_frame():
 
 @app.route('/activity_status')
 def activity_status():
-    return jsonify({"active": livefeed.get_activity_recognition_state()})
+    # Returns global activity recognition state
+    active = livefeed.get_activity_recognition_state()
+    return jsonify({'active': active})
 
 @app.route('/toggle_activity', methods=['POST'])
 def toggle_activity():
-    new_state = livefeed.toggle_activity_recognition()
-    return jsonify({"active": new_state})
-
-@app.route('/toggle_recording', methods=['POST'])
-def toggle_recording():
-    data = request.get_json()
-    recording_type = data.get('type', 'original') if data else 'original'
-    
-    current_status = livefeed.get_recording_status()
-    
-    if recording_type == 'original':
-        if not current_status['original']:
-            livefeed.start_recording('original')
-            return jsonify({"recording": True, "type": "original"})
-        else:
-            livefeed.stop_recording('original')
-            return jsonify({"recording": False, "type": "original"})
-    else:  # segmented
-        if not current_status['segmented']:
-            livefeed.start_recording('segmented')
-            return jsonify({"recording": True, "type": "segmented"})
-        else:
-            livefeed.stop_recording('segmented')
-            return jsonify({"recording": False, "type": "segmented"})
-
-@app.route('/toggle_dual_recording', methods=['POST'])
-def toggle_dual_recording():
-    """Toggle both original and segmented recording simultaneously"""
-    current_status = livefeed.get_recording_status()
-    
-    # If either recording is active, stop both
-    if current_status['original'] or current_status['segmented']:
-        livefeed.stop_dual_recording()
-        return jsonify({"recording": False, "message": "Both recordings stopped"})
-    else:
-        # Start both recordings
-        success = livefeed.start_dual_recording()
-        return jsonify({"recording": success, "message": "Both recordings started" if success else "Failed to start recordings"})
+    # Toggle global activity recognition state
+    active = livefeed.toggle_activity_recognition()
+    return jsonify({'active': active})
 
 @app.route('/recording_status')
 def recording_status():
+    # Returns global recording state (both original and segmented)
     status = livefeed.get_recording_status()
     return jsonify(status)
+
+@app.route('/toggle_dual_recording', methods=['POST'])
+def toggle_dual_recording():
+    # Toggle both original and segmented recording simultaneously
+    status = livefeed.get_recording_status()
+    if status['original'] or status['segmented']:
+        livefeed.stop_dual_recording()
+        return jsonify({'recording': False})
+    else:
+        success = livefeed.start_dual_recording()
+        return jsonify({'recording': success})
 
 @app.route('/download_recording/<filename>')
 def download_recording(filename):
@@ -565,6 +571,7 @@ def serve_employee_capture(filename):
 @app.route('/api/postprocess_progress/<recording_id>')
 def api_postprocess_progress(recording_id):
     progress = get_postprocess_progress(recording_id)
+    print(f"[DEBUG] Progress API called for {recording_id}: {progress}")  # Debug log
     return jsonify(progress)
 
 @app.route('/connection_status')
@@ -732,5 +739,30 @@ def get_employee_act_dir():
         'entries': entries
     })
 
+# --- SocketIO Setup ---
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Use a set to track connected Socket.IO session IDs
+active_ws_sessions = set()
+from threading import Lock
+active_ws_sessions_lock = Lock()
+
+def broadcast_user_count():
+    with active_ws_sessions_lock:
+        count = len(active_ws_sessions)
+    socketio.emit('user_count', {'connected_users': count})
+
+@socketio.on('connect')
+def handle_connect():
+    with active_ws_sessions_lock:
+        active_ws_sessions.add(request.sid)
+    broadcast_user_count()
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    with active_ws_sessions_lock:
+        active_ws_sessions.discard(request.sid)
+    broadcast_user_count()
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
