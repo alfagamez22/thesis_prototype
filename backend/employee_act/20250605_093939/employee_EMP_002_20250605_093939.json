@@ -1,0 +1,11 @@
+{
+  "employee_id": "EMP_002",
+  "timestamp": "2025-06-05T09:39:39.210588",
+  "image_path": "20250605_093939\\employee_EMP_002_20250605_093939.jpg",
+  "activities": [
+    "carry/hold (an object)",
+    "stand"
+  ],
+  "roi_info": "(265, 134)",
+  "confidence": 0.8173828125
+}

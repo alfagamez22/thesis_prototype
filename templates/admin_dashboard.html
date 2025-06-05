@@ -1,0 +1,391 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Video Monitoring System{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="admin-header">
+        <h2>Admin Dashboard</h2>
+        <a href="{{ url_for('admin_logout') }}" class="logout-button">
+            <span class="button-icon">🚪</span>
+            Logout
+        </a>
+    </div>
+
+    <div class="admin-content">
+        <!-- User Credentials Section -->
+        <div class="admin-section">
+            <div class="section-header">
+                <h3>Update User Credentials</h3>
+            </div>
+            <div class="section-content">
+                <div id="updateMessage" class="alert" style="display: none;"></div>
+                <form id="updateCredentialsForm" class="admin-form">
+                    <div class="form-group">
+                        <label for="new_username">New Username</label>
+                        <input type="text" id="new_username" name="new_username" 
+                               value="{{ user_data.username }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="new_password">New Password</label>
+                        <input type="password" id="new_password" name="new_password" 
+                               placeholder="Enter new password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="confirm_password">Confirm Password</label>
+                        <input type="password" id="confirm_password" name="confirm_password" 
+                               placeholder="Confirm new password" required>
+                    </div>
+                    <button type="submit" class="submit-button">
+                        <span class="button-icon">💾</span>
+                        Save Changes
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Password Reset Tickets Section -->
+        <div class="admin-section">
+            <div class="section-header">
+                <h3>Password Reset Tickets</h3>
+            </div>
+            <div class="section-content">
+                {% if tickets %}
+                    <div class="ticket-list">
+                        {% for ticket in tickets %}
+                        <div class="ticket-item" id="ticket-{{ loop.index0 }}">
+                            <div class="ticket-info">
+                                <h4>Ticket from: {{ ticket.email }}</h4>
+                                <p>Submitted: {{ ticket.timestamp }}</p>
+                            </div>
+                            <button class="resolve-button resolve-ticket" data-index="{{ loop.index0 }}">
+                                <span class="button-icon">✓</span>
+                                Mark as Resolved
+                            </button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="no-tickets">No pending tickets</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+:root {
+    --primary-color: #007bff;
+    --primary-hover: #0056b3;
+    --success-color: #28a745;
+    --success-hover: #218838;
+    --danger-color: #dc3545;
+    --danger-hover: #c82333;
+    --text-color: #333;
+    --text-muted: #6c757d;
+    --border-color: #dee2e6;
+    --card-bg: #fff;
+    --card-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    --header-bg: #f8f9fa;
+    --input-bg: #fff;
+    --success-bg: #d4edda;
+    --success-text: #155724;
+    --success-border: #c3e6cb;
+    --error-bg: #f8d7da;
+    --error-text: #721c24;
+    --error-border: #f5c6cb;
+}
+
+[data-theme="dark"] {
+    --primary-color: #0d6efd;
+    --primary-hover: #0b5ed7;
+    --success-color: #198754;
+    --success-hover: #157347;
+    --danger-color: #dc3545;
+    --danger-hover: #bb2d3b;
+    --text-color: #e9ecef;
+    --text-muted: #adb5bd;
+    --border-color: #495057;
+    --card-bg: #212529;
+    --card-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    --header-bg: #343a40;
+    --input-bg: #2b3035;
+    --success-bg: #1e4620;
+    --success-text: #d4edda;
+    --success-border: #2a6f2a;
+    --error-bg: #4a1c1c;
+    --error-text: #f8d7da;
+    --error-border: #6b2b2b;
+}
+
+.admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding: 1rem;
+    background: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: var(--card-shadow);
+}
+
+.admin-header h2 {
+    color: var(--text-color);
+    margin: 0;
+}
+
+.admin-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+}
+
+.admin-section {
+    background: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: var(--card-shadow);
+    overflow: hidden;
+}
+
+.section-header {
+    padding: 1rem;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.section-header h3 {
+    margin: 0;
+    color: var(--text-color);
+}
+
+.section-content {
+    padding: 1.5rem;
+}
+
+.admin-form .form-group {
+    margin-bottom: 1.5rem;
+}
+
+.admin-form label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+.admin-form input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--input-bg);
+    color: var(--text-color);
+    transition: border-color 0.2s;
+}
+
+.admin-form input:focus {
+    border-color: var(--primary-color);
+    outline: none;
+}
+
+.submit-button, .resolve-button, .logout-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 4px;
+    color: white;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.submit-button {
+    background: var(--primary-color);
+}
+
+.submit-button:hover {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+}
+
+.resolve-button {
+    background: var(--success-color);
+}
+
+.resolve-button:hover {
+    background: var(--success-hover);
+    transform: translateY(-1px);
+}
+
+.logout-button {
+    background: var(--danger-color);
+}
+
+.logout-button:hover {
+    background: var(--danger-hover);
+    transform: translateY(-1px);
+}
+
+.ticket-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.ticket-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    transition: transform 0.2s;
+}
+
+.ticket-item:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--card-shadow);
+}
+
+.ticket-info h4 {
+    margin: 0 0 0.5rem 0;
+    color: var(--text-color);
+}
+
+.ticket-info p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.no-tickets {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 2rem;
+    font-style: italic;
+}
+
+.alert {
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.alert-success {
+    background: var(--success-bg);
+    color: var(--success-text);
+    border: 1px solid var(--success-border);
+}
+
+.alert-danger {
+    background: var(--error-bg);
+    color: var(--error-text);
+    border: 1px solid var(--error-border);
+}
+
+.button-icon {
+    font-size: 1.1em;
+}
+
+@media (max-width: 768px) {
+    .admin-content {
+        grid-template-columns: 1fr;
+    }
+    
+    .admin-header {
+        flex-direction: column;
+        gap: 1rem;
+        text-align: center;
+    }
+}
+</style>
+
+<script>
+document.getElementById('updateCredentialsForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const newPassword = document.getElementById('new_password').value;
+    const confirmPassword = document.getElementById('confirm_password').value;
+    const messageDiv = document.getElementById('updateMessage');
+    
+    if (newPassword !== confirmPassword) {
+        messageDiv.className = 'alert alert-danger';
+        messageDiv.textContent = 'Passwords do not match!';
+        messageDiv.style.display = 'block';
+        return;
+    }
+    
+    const formData = new FormData(this);
+    
+    try {
+        const response = await fetch('/admin/update_user_credentials', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.message) {
+            messageDiv.className = 'alert alert-success';
+            messageDiv.textContent = 'Credentials updated successfully';
+            // Clear password fields
+            document.getElementById('new_password').value = '';
+            document.getElementById('confirm_password').value = '';
+            
+            // Update the displayed username
+            const usernameInput = document.getElementById('new_username');
+            usernameInput.value = formData.get('new_username');
+            
+            // Show success message for 3 seconds
+            setTimeout(() => {
+                messageDiv.style.display = 'none';
+            }, 3000);
+        } else {
+            messageDiv.className = 'alert alert-danger';
+            messageDiv.textContent = data.error || 'Error updating credentials';
+        }
+        messageDiv.style.display = 'block';
+    } catch (error) {
+        console.error('Error:', error);
+        messageDiv.className = 'alert alert-danger';
+        messageDiv.textContent = 'Error updating credentials. Please try again.';
+        messageDiv.style.display = 'block';
+    }
+});
+
+document.querySelectorAll('.resolve-ticket').forEach(button => {
+    button.addEventListener('click', async function() {
+        const ticketIndex = this.dataset.index;
+        const formData = new FormData();
+        formData.append('ticket_index', ticketIndex);
+        
+        try {
+            const response = await fetch('/admin/resolve_ticket', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok && data.message) {
+                const ticketElement = document.getElementById(`ticket-${ticketIndex}`);
+                ticketElement.remove();
+                if (document.querySelectorAll('.ticket-item').length === 0) {
+                    document.querySelector('.section-content').innerHTML = '<p class="no-tickets">No pending tickets</p>';
+                }
+            } else {
+                alert('Error resolving ticket: ' + (data.error || 'Unknown error'));
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Error resolving ticket. Please try again.');
+        }
+    });
+});
+</script>
+{% endblock %} 

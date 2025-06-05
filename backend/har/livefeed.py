@@ -42,7 +42,8 @@ class Config:
         parser.add_argument("-delay", type=int, default=30, help="frame delay amount")
         parser.add_argument("-fps", type=int, default=10, help="target frames per second")
         parser.add_argument("-det_freq", type=int, default=6, help="detection frequency (every N frames)")
-        parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
+        #parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "COFFEESHOP_1.mp4"), help="file path for video input")
+        parser.add_argument("-F", type=str, default=os.path.join(os.path.dirname(__file__), "assets", "rtsp.mp4"), help="file path for video input")
         # parser.add_argument("-F", type=str, default="<REPLACE> rtsp://username:password@tunnelip:8554/stream2?tcp <REPLACE>", help="file path for video input") #rtsp://username:password@tunnelip:8554/stream2?tcp
      #   parser.add_argument("-F", type=str, default="rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/my_camera?tcp", help="file path for video input") #for rtsp stream 192.168.68.128:554 #rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/stream2?tcp
     #    parser.add_argument("-F", type=str, default="rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/my_camera?tcp", help="file path for video input") #for rtsp stream 192.168.68.128:554 #rtsp://harveybuan123:harveybuan1234@100.107.152.111:8554/stream2?tcp
@@ -70,14 +71,25 @@ class Config:
         }
         self.color = self.COLORS.get(self.args.color, (0, 255, 0))
         self.font = self.args.font
-        self.thickness = self.args.line
-
-        # Fixed display dimensions
+        self.thickness = self.args.line        # Fixed display dimensions
         self.display_width, self.display_height = 1280, 720
 
-        # Fixed ROI line (hardcoded from previous user selection)
-        self.roi_line_p1 = (7, 299)
-        self.roi_line_p2 = (1253, 675)
+        # Fixed ROI polygon (hardcoded from user selection)
+        self.roi_polygon = [
+            (1194, 358),
+            (585, 355),
+            (389, 232),
+            (236, 115),
+            (12, 20)
+        ]
+        
+        # Keep backward compatibility with line-based ROI
+        self.roi_line_p1 = (1163, 425)
+        self.roi_line_p2 = (97, 121)
+        
+        #for recorded coffee shop 
+        #self.roi_line_p1 = (7, 299)
+        #self.roi_line_p2 = (1253, 675)
 
         # Set video path
         # if self.args.F and not os.path.isabs(self.args.F):
@@ -261,6 +273,26 @@ def is_on_active_side(pt, line_p1, line_p2):
     # Cross product
     cross = dx * dyp - dy * dxp
     return cross > 0  # Positive cross product defines the active side
+
+def is_point_in_polygon(pt, polygon):
+    """Check if a point is inside a polygon using ray casting algorithm"""
+    x, y = pt
+    n = len(polygon)
+    inside = False
+    
+    p1x, p1y = polygon[0]
+    for i in range(1, n + 1):
+        p2x, p2y = polygon[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    
+    return inside
 
 # ----------------------
 # Video and Recording Management

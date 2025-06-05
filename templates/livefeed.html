@@ -15,15 +15,13 @@ Live Feed
                 <i class="fas fa-users"></i> Connected users: <span id="connectedUsersCount">1</span>
             </span>
         </div>
-    </div>
-
-    <div class="row">
-        <div class="col-md-8">
+    </div>      <div class="livefeed-layout">
+        <div class="video-section">
             <div class="video-container position-relative">
-                <img src="{{ url_for('video_feed') }}" width="150%" alt="Live Feed">
+                <img src="{{ url_for('video_feed') }}" class="video-feed-img" alt="Live Feed">
             </div>
         </div>
-        <div class="col-md-4">
+        <div class="controls-section">
             <div class="controls-container">
                 <div class="controls-header">
                     <h3><i class="fas fa-sliders-h"></i> Controls</h3>
@@ -121,11 +119,15 @@ function updateConnectionStatusUI(status) {
     }
     if (status.connected) {
         dot.style.background = '#28a745';
-        // Use backend-provided latency_ms if available
-        let latencyMs = (status.latency_ms !== undefined && status.latency_ms !== null)
-            ? status.latency_ms.toFixed(1)
-            : (status.speed > 0 ? (1000 / status.speed).toFixed(1) : 'N/A');
-        text.textContent = `Connected (${latencyMs} ms)`;
+        // Use backend-provided latency_ms if available, otherwise just show "Connected"
+        if (status.latency_ms !== undefined && status.latency_ms !== null) {
+            text.textContent = `Connected (${status.latency_ms.toFixed(1)} ms)`;
+        } else if (status.speed > 0) {
+            const latencyMs = (1000 / status.speed).toFixed(1);
+            text.textContent = `Connected (${latencyMs} ms)`;
+        } else {
+            text.textContent = 'Connected';
+        }
     } else {
         dot.style.background = '#dc3545';
         text.textContent = 'Disconnected';
@@ -603,19 +605,34 @@ socket.on('user_count', function(data) {
     overflow: hidden;
     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     width: 100%;
-    max-width: 800px;
+    max-width: 1200px;
+    min-height: 600px;
+}
+
+.video-feed-img {
+    width: 100%;
+    height: auto;
+    display: block;
+    max-width: 100%;
+    min-height: 600px;
+    object-fit: cover;
 }
 
 @media (max-width: 768px) {
     .video-container {
         width: 100%;
         max-width: none;
+        min-height: 400px;
+    }
+    
+    .video-feed-img {
+        min-height: 400px;
     }
 }
 
 @media (min-width: 1200px) {
     .video-container {
-        max-width: 1000px;
+        max-width: 1400px;
     }
 }
 
@@ -695,13 +712,14 @@ socket.on('user_count', function(data) {
 .controls-container {
     background: linear-gradient(145deg, #ffffff, #f8fafc);
     border-radius: 20px;
-    padding: 24px;
+    padding: 32px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     border: 1px solid rgba(229, 231, 235, 0.5);
     
-    height: 638px;       /* Fixed height */
-    max-height: 80vh;    /* Maximum height (80% of viewport) */
-    min-height: 400px;   /* Minimum height */
+    height: 550px;       /* Increased height */
+    max-height: 85vh;    /* Maximum height (85% of viewport) */
+    min-height: 550px;   /* Increased minimum height */
+    
     
 }
 
@@ -734,13 +752,14 @@ socket.on('user_count', function(data) {
 .control-card {
     background: #ffffff;
     border-radius: 16px;
-    padding: 20px;
+    padding: 24px;
     border: 1px solid #e5e7eb;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
     transition: all 0.3s ease;
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 20px;
+    min-height: 120px;
 }
 
 .control-card:hover {
@@ -749,13 +768,13 @@ socket.on('user_count', function(data) {
 }
 
 .control-icon {
-    width: 50px;
-    height: 50px;
+    width: 60px;
+    height: 60px;
     border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
+    font-size: 24px;
     color: white;
     background: linear-gradient(145deg, #3b82f6, #1d4ed8);
     flex-shrink: 0;

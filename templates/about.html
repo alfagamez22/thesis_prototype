@@ -1,5 +1,190 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+
+{% block title %}About - Realtime Video Monitoring System{% endblock %}
 
 {% block content %}
-    <h1>{% block title %} Welcome to your About page! {% endblock %}</h1>
+<div class="about-container">
+    <div class="hero-section">
+        <h1>About Our System</h1>
+        <p class="subtitle">Advanced Video Monitoring and Activity Recognition Platform</p>
+    </div>
+
+    <div class="about-content">
+        <section class="about-section">
+            <h2>Our Mission</h2>
+            <p>We are dedicated to providing a comprehensive video monitoring solution that enhances workplace safety, efficiency, and accountability through advanced computer vision and artificial intelligence technologies.</p>
+        </section>
+
+        <section class="about-section">
+            <h2>Key Features</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="card-icon">📹</div>
+                    <h3>Real-time Monitoring</h3>
+                    <p>Live video feed with instant activity recognition and analysis</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="card-icon">🤖</div>
+                    <h3>AI-Powered Detection</h3>
+                    <p>Advanced human activity recognition using state-of-the-art computer vision</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="card-icon">📊</div>
+                    <h3>Activity Analytics</h3>
+                    <p>Comprehensive tracking and analysis of employee activities</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="card-icon">🔒</div>
+                    <h3>Secure Storage</h3>
+                    <p>Safe and organized storage of video recordings and activity logs</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="about-section">
+            <h2>System Components</h2>
+            <div class="components-list">
+                <div class="component-item">
+                    <h3>Live Feed Module</h3>
+                    <p>Real-time video streaming with instant activity detection and analysis capabilities.</p>
+                </div>
+
+                <div class="component-item">
+                    <h3>Recording System</h3>
+                    <p>Dual recording capability for both original and segmented video outputs.</p>
+                </div>
+
+                <div class="component-item">
+                    <h3>Employee Management</h3>
+                    <p>Comprehensive employee database with activity tracking and monitoring.</p>
+                </div>
+
+                <div class="component-item">
+                    <h3>Activity Recognition</h3>
+                    <p>Advanced AI algorithms for detecting and classifying human activities.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="about-section">
+            <h2>Technology Stack</h2>
+            <div class="tech-stack">
+                <div class="tech-item">
+                    <h4>Backend</h4>
+                    <ul>
+                        <li>Python/Flask</li>
+                        <li>OpenCV</li>
+                        <li>SQLAlchemy</li>
+                        <li>Computer Vision Models</li>
+                    </ul>
+                </div>
+
+                <div class="tech-item">
+                    <h4>Frontend</h4>
+                    <ul>
+                        <li>HTML5/CSS3</li>
+                        <li>JavaScript</li>
+                        <li>Responsive Design</li>
+                        <li>Real-time Updates</li>
+                    </ul>
+                </div>
+
+                <div class="tech-item">
+                    <h4>Features</h4>
+                    <ul>
+                        <li>Dark/Light Theme</li>
+                        <li>Real-time Monitoring</li>
+                        <li>Activity Analytics</li>
+                        <li>Secure Authentication</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<style>
+.about-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.about-section {
+    margin-bottom: 3rem;
+}
+
+.about-section h2 {
+    color: var(--text-primary);
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.components-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 2rem;
+}
+
+.component-item {
+    background: var(--bg-secondary);
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px var(--card-shadow);
+}
+
+.component-item h3 {
+    color: var(--accent-primary);
+    margin-bottom: 1rem;
+}
+
+.tech-stack {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 2rem;
+}
+
+.tech-item {
+    background: var(--bg-secondary);
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px var(--card-shadow);
+}
+
+.tech-item h4 {
+    color: var(--accent-primary);
+    margin-bottom: 1rem;
+}
+
+.tech-item ul {
+    list-style: none;
+    padding: 0;
+}
+
+.tech-item li {
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+}
+
+.tech-item li:before {
+    content: "•";
+    color: var(--accent-primary);
+    margin-right: 0.5rem;
+}
+
+@media (max-width: 768px) {
+    .about-container {
+        padding: 1rem;
+    }
+    
+    .components-list,
+    .tech-stack {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
 {% endblock %}

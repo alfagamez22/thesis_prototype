@@ -16,6 +16,9 @@ import threading
 import time
 # --- WebSocket (Socket.IO) Setup for Real-Time Connected User Count ---
 from flask_socketio import SocketIO, emit
+from werkzeug.security import check_password_hash, generate_password_hash
+import re
+import json
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -58,10 +61,59 @@ def get_postprocess_progress(recording_id):
     with postprocess_progress_lock:
         return postprocess_progress.get(recording_id, {'percent': 0, 'status': 'Queued', 'frame_details': {}})
 
-# @app.route('/postprocess_progress/<recording_id>')
-# def postprocess_progress_status(recording_id):
-#     progress = get_postprocess_progress(recording_id)
-#     return jsonify(progress)
+# User data file path
+USER_DATA_FILE = os.path.join(os.path.dirname(__file__), 'user_data.json')
+
+# Default user data
+DEFAULT_USER_DATA = {
+    'username': 'username',  # Changed from 'username' to 'admin' for clarity
+    'email': 'admin@example.com',
+    'password': generate_password_hash('password'),  # Changed to a more secure default password
+    'full_name': 'Administrator',
+    'phone': '09123456789',
+    'dob': datetime(1990, 1, 1).date().isoformat(),
+    'gender': 'male',
+    'bio': 'System Administrator'
+}
+
+def load_user_data():
+    """Load user data from JSON file or create with defaults if not exists"""
+    try:
+        if os.path.exists(USER_DATA_FILE):
+            with open(USER_DATA_FILE, 'r') as f:
+                data = json.load(f)
+                # Convert date string back to date object
+                data['dob'] = datetime.fromisoformat(data['dob']).date()
+                return data
+        else:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(USER_DATA_FILE), exist_ok=True)
+            # Save default data to file
+            save_user_data(DEFAULT_USER_DATA)
+            return DEFAULT_USER_DATA
+    except Exception as e:
+        print(f"Error loading user data: {e}")
+        return DEFAULT_USER_DATA
+
+def save_user_data(data):
+    """Save user data to JSON file"""
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(USER_DATA_FILE), exist_ok=True)
+        
+        # Convert date to ISO format string for JSON serialization
+        data_to_save = data.copy()
+        data_to_save['dob'] = data['dob'].isoformat()
+        
+        with open(USER_DATA_FILE, 'w') as f:
+            json.dump(data_to_save, f, indent=4)
+        print(f"User data saved successfully to {USER_DATA_FILE}")
+    except Exception as e:
+        print(f"Error saving user data: {e}")
+
+# Load user data at startup
+USER_DATA = load_user_data()
+print(f"Loaded user data: {USER_DATA['username']}")  # Debug print
 
 # Login required decorator
 def login_required(f):
@@ -90,18 +142,24 @@ def track_active_session():
 @app.route("/login", methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        username = request.form.get('username')
+        password = request.form.get('password')
         
-        # Replace this with your actual user authentication logic
-        if username == "username" and password == "password":  # Example credentials
+        print(f"Login attempt - Username: {username}")  # Debug print
+        print(f"Stored username: {USER_DATA['username']}")  # Debug print
+        
+        # Check against user data
+        if username == USER_DATA['username'] and check_password_hash(USER_DATA['password'], password):
             session['logged_in'] = True
-            if 'sid' not in session:
-                session['sid'] = str(uuid.uuid4())
-            from backend.har import livefeed
-            livefeed.add_active_session(session['sid'])
+            session['username'] = USER_DATA['username']
+            print(f"Login successful for user: {username}")  # Debug print
             return redirect(url_for('home'))
         else:
+            print(f"Login failed for user: {username}")  # Debug print
+            if username != USER_DATA['username']:
+                print("Username mismatch")  # Debug print
+            else:
+                print("Password mismatch")  # Debug print
             flash('Invalid username or password')
     
     return render_template("login.html")
@@ -112,7 +170,7 @@ def logout():
         from backend.har import livefeed
         livefeed.remove_active_session(session['sid'])
     session.pop('logged_in', None)
-    session.pop('sid', None)
+    session.pop('username', None)
     return redirect(url_for('login'))
 
 @app.route("/")
@@ -143,22 +201,7 @@ def employees():
 @app.route("/account")
 @login_required
 def account():
-    # For demonstration, use a mock user or fetch from session/db if available
-    user = None
-    if session.get('user_id'):
-        from backend.models import User
-        user = User.query.get(session['user_id'])
-    if not user:
-        # fallback: show a demo user (since login is hardcoded)
-        user = type('User', (), {
-            'username': 'username',
-            'email': 'demo@email.com',
-            'role': 'user',
-            'full_name': 'Demo User',
-            'created_at': None,
-            'last_login': None
-        })()
-    return render_template("account.html", user=user)
+    return render_template('account.html', user=USER_DATA)
 
 @app.route("/employee_activity")
 @login_required
@@ -224,20 +267,6 @@ def toggle_dual_recording():
 @app.route('/download_recording/<filename>')
 def download_recording(filename):
     return send_from_directory('backend','recordings', filename, as_attachment=True)
-
-# @app.route('/list_recordings')
-# def list_recordings():
-#     recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
-#     if not os.path.exists(recordings_dir):
-#         os.makedirs(recordings_dir)
-    
-#     files = [f for f in os.listdir(recordings_dir) if f.endswith('.mp4')]
-#     return jsonify({"files": files})
-
-# @app.route('/recordings/<filename>')
-# def serve_recording(filename):
-#     recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
-#     return send_from_directory(recordings_dir, filename)
 
 @app.route('/list_recordings')
 def list_recordings():
@@ -796,5 +825,199 @@ def list_all_employee_captures():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/update_profile', methods=['POST'])
+@login_required
+def update_profile():
+    # Update profile information
+    USER_DATA['full_name'] = request.form.get('fullName')
+    USER_DATA['phone'] = request.form.get('phone')
+    USER_DATA['dob'] = datetime.strptime(request.form.get('dob'), '%Y-%m-%d').date()
+    USER_DATA['gender'] = request.form.get('gender')
+    USER_DATA['bio'] = request.form.get('bio')
+    
+    # Validate phone number
+    if not re.match(r'^09\d{9}$', USER_DATA['phone']):
+        return jsonify({'error': 'Invalid phone number format'}), 400
+    
+    # Save changes to file
+    save_user_data(USER_DATA)
+    return jsonify({'message': 'Profile updated successfully'}), 200
+
+@app.route('/update_password', methods=['POST'])
+@login_required
+def update_password():
+    current_password = request.form.get('currentPassword')
+    new_password = request.form.get('newPassword')
+    confirm_password = request.form.get('confirmPassword')
+    
+    # Verify current password
+    if not check_password_hash(USER_DATA['password'], current_password):
+        return jsonify({'error': 'Current password is incorrect'}), 400
+    
+    # Verify new passwords match
+    if new_password != confirm_password:
+        return jsonify({'error': 'New passwords do not match'}), 400
+    
+    # Update password
+    USER_DATA['password'] = generate_password_hash(new_password)
+    
+    # Save changes to file
+    save_user_data(USER_DATA)
+    return jsonify({'message': 'Password updated successfully'}), 200
+
+@app.route('/update_username', methods=['POST'])
+@login_required
+def update_username():
+    new_username = request.form.get('newUsername')
+    current_password = request.form.get('usernamePassword')
+    
+    # Verify current password
+    if not check_password_hash(USER_DATA['password'], current_password):
+        return jsonify({'error': 'Current password is incorrect'}), 400
+    
+    # Update username
+    USER_DATA['username'] = new_username
+    session['username'] = new_username
+    
+    # Save changes to file
+    save_user_data(USER_DATA)
+    return jsonify({'message': 'Username updated successfully'}), 200
+
+@app.route('/update_email', methods=['POST'])
+@login_required
+def update_email():
+    new_email = request.form.get('newEmail')
+    current_password = request.form.get('emailPassword')
+    
+    # Verify current password
+    if not check_password_hash(USER_DATA['password'], current_password):
+        return jsonify({'error': 'Current password is incorrect'}), 400
+    
+    # Update email
+    USER_DATA['email'] = new_email
+    
+    # Save changes to file
+    save_user_data(USER_DATA)
+    return jsonify({'message': 'Email updated successfully'}), 200
+
+# Admin credentials (hardcoded)
+ADMIN_CREDENTIALS = {
+    'username': 'admin',
+    'password': generate_password_hash('password')
+}
+
+# Store submitted tickets
+PASSWORD_RESET_TICKETS = []
+
+@app.route("/forgot_password", methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        # Store the ticket
+        ticket = {
+            'email': email,
+            'timestamp': datetime.now().isoformat(),
+            'status': 'pending'
+        }
+        PASSWORD_RESET_TICKETS.append(ticket)
+        flash('Ticket submitted successfully. Please wait for admin to contact you.')
+        return redirect(url_for('login'))
+    return render_template("forgot_password.html")
+
+@app.route("/admin/login", methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if username == ADMIN_CREDENTIALS['username'] and check_password_hash(ADMIN_CREDENTIALS['password'], password):
+            session['admin_logged_in'] = True
+            return redirect(url_for('admin_dashboard'))
+        else:
+            flash('Invalid admin credentials')
+    
+    return render_template("admin_login.html")
+
+@app.route("/admin/dashboard")
+def admin_dashboard():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin_login'))
+    
+    # Get all pending tickets
+    pending_tickets = [t for t in PASSWORD_RESET_TICKETS if t['status'] == 'pending']
+    
+    # Load current user data
+    current_user_data = load_user_data()
+    
+    return render_template("admin_dashboard.html", 
+                         tickets=pending_tickets,
+                         user_data=current_user_data)
+
+@app.route("/admin/update_user_credentials", methods=['POST'])
+def update_user_credentials():
+    if not session.get('admin_logged_in'):
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    new_username = request.form.get('new_username')
+    new_password = request.form.get('new_password')
+    
+    if not new_username or not new_password:
+        return jsonify({'error': 'Username and password are required'}), 400
+    
+    try:
+        # Load current user data
+        current_user_data = load_user_data()
+        
+        # Update user data
+        current_user_data['username'] = new_username
+        current_user_data['password'] = generate_password_hash(new_password)
+        
+        # Save changes to file
+        save_user_data(current_user_data)
+        
+        # Update global USER_DATA
+        global USER_DATA
+        USER_DATA = current_user_data
+        
+        # Update session if the current user is logged in
+        if session.get('username') == current_user_data['username']:
+            session['username'] = new_username
+        
+        print(f"User credentials updated - New username: {new_username}")  # Debug print
+        return jsonify({'message': 'User credentials updated successfully'})
+    except Exception as e:
+        print(f"Error updating user credentials: {e}")  # Debug print
+        return jsonify({'error': f'Failed to update credentials: {str(e)}'}), 500
+
+@app.route("/admin/resolve_ticket", methods=['POST'])
+def resolve_ticket():
+    if not session.get('admin_logged_in'):
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    ticket_index = request.form.get('ticket_index')
+    if ticket_index is not None:
+        try:
+            PASSWORD_RESET_TICKETS[int(ticket_index)]['status'] = 'resolved'
+            return jsonify({'message': 'Ticket resolved successfully'})
+        except (IndexError, ValueError):
+            return jsonify({'error': 'Invalid ticket index'}), 400
+    
+    return jsonify({'error': 'Ticket index required'}), 400
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop('admin_logged_in', None)
+    return redirect(url_for('admin_login'))
+
 if __name__ == "__main__":
+    # Ensure user data is properly initialized
+    if not os.path.exists(USER_DATA_FILE):
+        print("Initializing user data file with default credentials:")
+        print(f"Username: {DEFAULT_USER_DATA['username']}")
+        print(f"Password: password")  # Don't print the hashed password
+        save_user_data(DEFAULT_USER_DATA)
+    
+    # Run the app with SocketIO
+    # print("Starting server on http://localhost:5000")
+    # app.run(host="127.0.0.1", port=5000, debug=True)  # Changed from 0.0.0.0 to 127.0.0.1
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)
